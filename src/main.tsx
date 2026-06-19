@@ -1,0 +1,965 @@
+import { useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  Handle,
+  Position,
+  type Edge,
+  type Node,
+  MarkerType,
+  useReactFlow,
+  ReactFlowProvider,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  Ban,
+  Check,
+  CircleDot,
+  Download,
+  GitBranch,
+  RotateCcw,
+  Search,
+  Sparkles,
+  Undo2,
+} from 'lucide-react';
+
+import type {
+  AndOrGraph,
+  BuildNode,
+  ChoiceBudget,
+  FeatureMeta,
+  HistorySnapshot,
+} from './types';
+
+import { sampleGraph, sampleMeta } from './sampleData';
+
+import {
+  annotateChoicesFor,
+  applyLeaf,
+  applySplit,
+  choicesFor,
+  featureLabel,
+  findNode,
+  formatObjective,
+  groupName,
+  isComplete,
+  lowerBound,
+  makeRoot,
+  nodeBudgetFor,
+  normalizedObjective,
+  rewind,
+  rootBudget,
+  rootSize,
+  thresholdLabel,
+  treePaths,
+  unresolvedNodes,
+} from './graphUtils';
+
+import { layoutTree } from './layout';
+import './style.css';
+
+declare global {
+  interface Window {
+    PRAXIS_ANDOR_GRAPH?: AndOrGraph;
+    PRAXIS_ANDOR_META?: FeatureMeta & Record<string, unknown>;
+
+    PRAXIS_BUILDER_PAYLOAD?: {
+      graph?: AndOrGraph;
+      meta?: FeatureMeta & Record<string, unknown>;
+
+      feature_names?: string[];
+      featureNames?: string[];
+
+      continuous_groups?: Record<string, number[]>;
+      continuousGroups?: Record<string, number[]>;
+
+      thresholds?: Record<string, unknown>;
+
+      gamma?: number;
+      lambda_reg?: number;
+      lambdaReg?: number;
+    };
+  }
+}
+
+type NodeData = {
+  b: BuildNode;
+  active: boolean;
+  choices: number;
+  feasibleChoices: number;
+  meta: FeatureMeta & Record<string, unknown>;
+  graph: AndOrGraph;
+};
+
+function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as HistorySnapshot;
+}
+
+function coerceMeta(
+  payload: Window['PRAXIS_BUILDER_PAYLOAD'],
+): FeatureMeta & Record<string, unknown> {
+  const payloadMeta = (payload?.meta ?? {}) as FeatureMeta & Record<string, unknown>;
+
+  if (window.PRAXIS_ANDOR_META) {
+    return {
+      ...window.PRAXIS_ANDOR_META,
+      gamma:
+        window.PRAXIS_ANDOR_META.gamma ??
+        payload?.gamma ??
+        payloadMeta.gamma,
+    };
+  }
+
+  return {
+    ...sampleMeta,
+    ...payloadMeta,
+
+    featureNames:
+      payloadMeta.featureNames ??
+      payload?.featureNames ??
+      payload?.feature_names ??
+      sampleMeta.featureNames,
+
+    continuousGroups:
+      payloadMeta.continuousGroups ??
+      payload?.continuousGroups ??
+      payload?.continuous_groups ??
+      sampleMeta.continuousGroups,
+
+    thresholds:
+      payloadMeta.thresholds ??
+      payload?.thresholds ??
+      sampleMeta.thresholds,
+
+    gamma:
+      payloadMeta.gamma ??
+      payload?.gamma,
+
+    lambda_reg:
+      payloadMeta.lambda_reg ??
+      payload?.lambda_reg ??
+      payload?.lambdaReg,
+  } as FeatureMeta & Record<string, unknown>;
+}
+
+function stripZeros(x: string): string {
+  return x.replace(/\.?0+$/, '');
+}
+
+function formatThresholdValue(value: unknown): string {
+  const num = Number(value);
+
+  if (Number.isFinite(num)) {
+    return stripZeros(num.toFixed(3));
+  }
+
+  return String(value);
+}
+
+function prettyThresholdLabel(feature: number, meta: FeatureMeta): string {
+  return formatThresholdValue(thresholdLabel(feature, meta));
+}
+
+function prettySplitLabel(feature: number, meta: FeatureMeta): string {
+  const group = groupName(feature, meta);
+
+  if (group) {
+    return `${group} ≤ ${prettyThresholdLabel(feature, meta)}`;
+  }
+
+  const raw = featureLabel(feature, meta);
+
+  return raw.replace(
+    /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
+    (_match, op, value) => `${op} ${formatThresholdValue(value)}`,
+  );
+}
+
+function gammaRaw(
+  graph: AndOrGraph,
+  meta: FeatureMeta & Record<string, unknown>,
+): number | undefined {
+  const explicit =
+    meta.gamma ??
+    meta.leafPenalty ??
+    meta.leaf_penalty ??
+    meta.lambda_gamma;
+
+  const explicitNum = Number(explicit);
+  if (Number.isFinite(explicitNum)) {
+    return explicitNum;
+  }
+
+  const lambdaValue = meta.lambda_reg ?? meta.lambdaReg ?? meta.lambda;
+  const lambdaNum = Number(lambdaValue);
+
+  if (Number.isFinite(lambdaNum)) {
+    return Math.round(lambdaNum * rootSize(graph));
+  }
+
+  return undefined;
+}
+
+function leafMisclassificationRate(
+  graph: AndOrGraph,
+  meta: FeatureMeta & Record<string, unknown>,
+  leafId?: number,
+): string {
+  if (leafId === undefined || leafId === null) return 'err —';
+
+  const leaf = graph.leaf_nodes.find((x) => x.id === leafId) as
+    | {
+        id: number;
+        loss?: number;
+        subproblem_size?: number;
+      }
+    | undefined;
+
+  if (!leaf || leaf.loss === undefined || !leaf.subproblem_size || leaf.subproblem_size <= 0) {
+    return 'err —';
+  }
+
+  const gamma = gammaRaw(graph, meta);
+
+  if (gamma === undefined) {
+    return 'err needs γ';
+  }
+
+  const mistakes = Math.max(0, Number(leaf.loss) - gamma);
+  const pct = (100 * mistakes) / Number(leaf.subproblem_size);
+
+  return `${stripZeros(pct.toFixed(1))}% err`;
+}
+
+function PraxisNode({ data }: { data: NodeData }) {
+  const { b, active, choices, feasibleChoices, meta, graph } = data;
+
+  const icon =
+    b.kind === 'split' ? (
+      <GitBranch size={15} />
+    ) : b.kind === 'leaf' ? (
+      <Check size={15} />
+    ) : (
+      <CircleDot size={15} />
+    );
+
+  const title =
+    b.kind === 'split'
+      ? prettySplitLabel(b.feature, meta)
+      : b.kind === 'leaf'
+        ? `predict ${b.prediction}`
+        : `${feasibleChoices}/${choices} choices`;
+
+  const subtitle =
+    b.kind === 'split'
+      ? `split #${b.splitId}`
+      : b.kind === 'leaf'
+        ? leafMisclassificationRate(graph, meta, b.leafId)
+        : `best ${formatObjective(graph, lowerBound(graph, b))}`;
+
+  return (
+    <div
+      className={`praxis-node praxis-node-${b.kind} ${active ? 'active' : ''}`}
+    >
+      <Handle type="target" position={Position.Top} className="handle" />
+
+      <div className="node-icon">{icon}</div>
+
+      <div className="node-copy">
+        <div className="node-title" title={title}>
+          {title}
+        </div>
+        <div className="node-subtitle">{subtitle}</div>
+      </div>
+
+      {b.kind === 'choice' && <div className="choice-pill">{feasibleChoices}</div>}
+
+      <Handle type="source" position={Position.Bottom} className="handle" />
+    </div>
+  );
+}
+
+const nodeTypes = {
+  praxis: PraxisNode,
+};
+
+function downloadJson(name: string, x: unknown) {
+  const blob = new Blob([JSON.stringify(x, null, 2)], {
+    type: 'application/json',
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+
+  a.href = url;
+  a.download = name;
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function SplitButton({
+  annotated,
+  graph,
+  meta,
+  onClick,
+}: {
+  annotated: ChoiceBudget;
+  graph: AndOrGraph;
+  meta: FeatureMeta & Record<string, unknown>;
+  onClick: () => void;
+}) {
+  const { choice, objective, feasible, excess } = annotated;
+  const excessValue = excess ?? 0;
+
+  const disabledTitle = feasible
+    ? undefined
+    : `Not feasible under the current partial tree. Free ${formatObjective(
+        graph,
+        excessValue,
+      )} objective somewhere else, then this choice can become available again.`;
+
+  if (choice.kind === 'leaf') {
+    return (
+      <button
+        className={`choice-card leaf-choice ${
+          feasible ? '' : 'choice-card-disabled'
+        }`}
+        onClick={feasible ? onClick : undefined}
+        disabled={!feasible}
+        title={disabledTitle}
+      >
+        {!feasible && (
+          <div className="blocked-mark">
+            <Ban size={15} />
+          </div>
+        )}
+
+        <div className="choice-card-main">
+          Leaf prediction {choice.leaf.prediction}
+        </div>
+
+        <div className="choice-card-sub">
+          {leafMisclassificationRate(graph, meta, choice.leaf.id)} · obj{' '}
+          {formatObjective(graph, objective)} · n={choice.leaf.subproblem_size ?? '—'}
+          {!feasible ? ` · over by ${formatObjective(graph, excessValue)}` : ''}
+        </div>
+      </button>
+    );
+  }
+
+  const f = choice.split.feature;
+
+  return (
+    <button
+      className={`choice-card split-choice ${
+        feasible ? '' : 'choice-card-disabled'
+      }`}
+      onClick={feasible ? onClick : undefined}
+      disabled={!feasible}
+      title={disabledTitle}
+    >
+      {!feasible && (
+        <div className="blocked-mark">
+          <Ban size={15} />
+        </div>
+      )}
+
+      <div className="choice-card-main">{prettySplitLabel(f, meta)}</div>
+
+      <div className="choice-card-sub">
+        obj {formatObjective(graph, objective)} · feature {f} · split #
+        {choice.split.id}
+        {!feasible ? ` · over by ${formatObjective(graph, excessValue)}` : ''}
+      </div>
+    </button>
+  );
+}
+
+function SidePanel({
+  graph,
+  meta,
+  snapshot,
+  active,
+  onApplySplit,
+  onApplyLeaf,
+  onSetActive,
+  onReset,
+  onUndo,
+  canUndo,
+}: {
+  graph: AndOrGraph;
+  meta: FeatureMeta & Record<string, unknown>;
+  snapshot: HistorySnapshot;
+  active?: BuildNode;
+  onApplySplit: (splitId: number) => void;
+  onApplyLeaf: (leafId: number) => void;
+  onSetActive: (uid: number) => void;
+  onReset: () => void;
+  onUndo: () => void;
+  canUndo: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+
+  useEffect(() => {
+    setExpandedGroup(null);
+    setQuery('');
+  }, [active?.uid]);
+
+  const unresolved = unresolvedNodes(snapshot.root);
+
+  const activeChoices =
+    active && active.kind === 'choice'
+      ? annotateChoicesFor(graph, snapshot, active.uid)
+      : [];
+
+  const budget =
+    active && active.kind === 'choice'
+      ? nodeBudgetFor(graph, snapshot, active.uid)
+      : undefined;
+
+  const currentLower = lowerBound(graph, snapshot.root);
+  const feasibleTotal = activeChoices.filter((x) => x.feasible).length;
+
+  const q = query.trim().toLowerCase();
+
+  const filtered = activeChoices.filter((x) => {
+    const c = x.choice;
+
+    if (!q) return true;
+
+    if (c.kind === 'leaf') {
+      return `leaf predict ${c.leaf.prediction} ${leafMisclassificationRate(
+        graph,
+        meta,
+        c.leaf.id,
+      )} objective ${formatObjective(graph, x.objective)}`
+        .toLowerCase()
+        .includes(q);
+    }
+
+    return `${prettySplitLabel(c.split.feature, meta)} ${
+      groupName(c.split.feature, meta) ?? ''
+    } ${prettyThresholdLabel(c.split.feature, meta)} objective ${formatObjective(
+      graph,
+      x.objective,
+    )}`
+      .toLowerCase()
+      .includes(q);
+  });
+
+  const grouped = new Map<string, ChoiceBudget[]>();
+  const leaves: ChoiceBudget[] = [];
+
+  for (const c of filtered) {
+    if (c.choice.kind === 'leaf') {
+      leaves.push(c);
+    } else {
+      const key =
+        groupName(c.choice.split.feature, meta) ??
+        'Binary / already-binarized features';
+
+      grouped.set(key, [...(grouped.get(key) ?? []), c]);
+    }
+  }
+
+  const sortedGroupEntries = Array.from(grouped.entries()).map(([name, xs]) => {
+    const sorted = [...xs].sort((a, b) => {
+      if (a.choice.kind !== 'split' || b.choice.kind !== 'split') return 0;
+
+      return prettyThresholdLabel(a.choice.split.feature, meta).localeCompare(
+        prettyThresholdLabel(b.choice.split.feature, meta),
+        undefined,
+        { numeric: true },
+      );
+    });
+
+    const feasible = sorted.filter((x) => x.feasible);
+    const bestAny = Math.min(...sorted.map((x) => x.objective));
+    const bestFeasible =
+      feasible.length > 0 ? Math.min(...feasible.map((x) => x.objective)) : undefined;
+
+    return {
+      name,
+      choices: sorted,
+      totalCount: sorted.length,
+      feasibleCount: feasible.length,
+      bestAny,
+      bestFeasible,
+      collapsed: name !== 'Binary / already-binarized features' && sorted.length > 4,
+    };
+  });
+
+  const expandedEntry =
+    expandedGroup === null
+      ? undefined
+      : sortedGroupEntries.find((g) => g.name === expandedGroup);
+
+  const visibleGroupEntries =
+    expandedGroup === null
+      ? sortedGroupEntries
+      : expandedEntry
+        ? [expandedEntry]
+        : [];
+
+  const paths = treePaths(snapshot.root);
+
+  return (
+    <aside className="panel">
+      <div className="brand">
+        <div className="brand-badge">
+          <Sparkles size={19} />
+        </div>
+        <div>
+          <div className="brand-title">PRAXIS Tree Builder</div>
+          <div className="brand-subtitle">budget-aware Rashomon construction</div>
+        </div>
+      </div>
+
+      <div className="metric-grid">
+        <div className="metric">
+          <b>{formatObjective(graph, currentLower)}</b>
+          <span>current lower bound</span>
+        </div>
+        <div className="metric">
+          <b>{formatObjective(graph, rootBudget(graph))}</b>
+          <span>Rashomon budget</span>
+        </div>
+        <div className="metric">
+          <b>{formatObjective(graph, rootBudget(graph) - currentLower)}</b>
+          <span>remaining slack</span>
+        </div>
+        <div className="metric">
+          <b>{rootSize(graph).toLocaleString()}</b>
+          <span>training samples</span>
+        </div>
+      </div>
+
+      <div className="toolbar-row">
+        <button className="ghost-button" onClick={onUndo} disabled={!canUndo}>
+          <Undo2 size={15} /> Undo
+        </button>
+
+        <button className="ghost-button" onClick={onReset}>
+          <RotateCcw size={15} /> Reset
+        </button>
+
+        <button
+          className="ghost-button"
+          onClick={() =>
+            downloadJson('praxis-built-tree.json', {
+              complete: isComplete(snapshot.root),
+              objective_lower_bound: currentLower,
+              normalized_objective_lower_bound: normalizedObjective(
+                graph,
+                currentLower,
+              ),
+              paths,
+              tree: snapshot.root,
+            })
+          }
+        >
+          <Download size={15} /> Export
+        </button>
+      </div>
+
+      <section className="panel-section">
+        <div className="section-title">Frontier</div>
+
+        <div className="frontier-list">
+          {unresolved.map((n) => {
+            const ann = annotateChoicesFor(graph, snapshot, n.uid);
+            const feasible = ann.filter((x) => x.feasible).length;
+
+            return (
+              <button
+                key={n.uid}
+                className={`frontier-item ${
+                  n.uid === snapshot.activeUid ? 'selected' : ''
+                }`}
+                onClick={() => onSetActive(n.uid)}
+              >
+                <span>node {n.uid}</span>
+                <b>
+                  {feasible}/{ann.length}
+                </b>
+              </button>
+            );
+          })}
+
+          {unresolved.length === 0 && (
+            <div className="empty">
+              Tree complete. Export it or rewind a branch.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel-section choice-panel">
+        <div className="section-title">
+          {expandedEntry
+            ? `Thresholds for ${expandedEntry.name}`
+            : `Choices for node ${active?.uid ?? '—'}`}
+        </div>
+
+        {budget && (
+          <div className="budget-box">
+            <div>
+              <span>available here</span>
+              <b>{formatObjective(graph, budget.nodeAvailableBudget)}</b>
+            </div>
+            <div>
+              <span>best here</span>
+              <b>{formatObjective(graph, budget.nodeBestObjective)}</b>
+            </div>
+            <div>
+              <span>already committed</span>
+              <b>{formatObjective(graph, budget.otherLowerBound)}</b>
+            </div>
+            <div>
+              <span>feasible choices</span>
+              <b>
+                {feasibleTotal}/{activeChoices.length}
+              </b>
+            </div>
+          </div>
+        )}
+
+        {expandedEntry && (
+          <button
+            className="back-button"
+            onClick={() => {
+              setExpandedGroup(null);
+              setQuery('');
+            }}
+          >
+            ← Back to feature choices
+          </button>
+        )}
+
+        <label className="search-box">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={
+              expandedEntry
+                ? 'Search thresholds'
+                : 'Search features or thresholds'
+            }
+          />
+        </label>
+
+        <AnimatePresence mode="popLayout">
+          {!expandedEntry && leaves.length > 0 && (
+            <motion.div
+              className="choice-group"
+              layout
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <div className="choice-group-title">Leaf options</div>
+
+              {leaves.map((x) =>
+                x.choice.kind === 'leaf' ? (
+                  <SplitButton
+                    key={`l-${x.choice.leaf.id}`}
+                    annotated={x}
+                    graph={graph}
+                    meta={meta}
+                    onClick={() => onApplyLeaf(x.choice.leaf.id)}
+                  />
+                ) : null,
+              )}
+            </motion.div>
+          )}
+
+          {visibleGroupEntries.map((entry) => {
+            if (entry.collapsed && !expandedEntry) {
+              return (
+                <motion.div
+                  className="choice-group collapsed-choice-group"
+                  layout
+                  key={entry.name}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                >
+                  <div className="choice-group-title">
+                    {entry.name}
+                    <span className="choice-group-count">
+                      {entry.feasibleCount}/{entry.totalCount} feasible
+                    </span>
+                  </div>
+
+                  <button
+                    className="feature-summary-card"
+                    onClick={() => {
+                      setExpandedGroup(entry.name);
+                      setQuery('');
+                    }}
+                  >
+                    <div className="feature-summary-main">
+                      <span>Choose threshold</span>
+                      <b>{entry.feasibleCount}/{entry.totalCount}</b>
+                    </div>
+
+                    <div className="feature-summary-sub">
+                      best feasible{' '}
+                      {entry.bestFeasible === undefined
+                        ? '—'
+                        : formatObjective(graph, entry.bestFeasible)}
+                      {' · '}
+                      best overall {formatObjective(graph, entry.bestAny)}
+                    </div>
+
+                    <div className="feature-summary-hint">
+                      Click to choose threshold for {entry.name}
+                    </div>
+                  </button>
+                </motion.div>
+              );
+            }
+
+            return (
+              <motion.div
+                className="choice-group"
+                layout
+                key={entry.name}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+              >
+                <div className="choice-group-title">
+                  {entry.name}
+                  {expandedEntry && (
+                    <span className="choice-group-count">
+                      {entry.feasibleCount}/{entry.totalCount} feasible
+                    </span>
+                  )}
+                </div>
+
+                <div className="choice-grid">
+                  {entry.choices.map((x) =>
+                    x.choice.kind === 'split' ? (
+                      <SplitButton
+                        key={`s-${x.choice.split.id}`}
+                        annotated={x}
+                        graph={graph}
+                        meta={meta}
+                        onClick={() => onApplySplit(x.choice.split.id)}
+                      />
+                    ) : null,
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </section>
+    </aside>
+  );
+}
+
+function FlowView({
+  graph,
+  meta,
+  snapshot,
+  setSnapshot,
+  pushHistory,
+}: {
+  graph: AndOrGraph;
+  meta: FeatureMeta & Record<string, unknown>;
+  snapshot: HistorySnapshot;
+  setSnapshot: (s: HistorySnapshot) => void;
+  pushHistory: () => void;
+}) {
+  const rf = useReactFlow();
+
+  const { nodes: laidNodes, edges: laidEdges } = useMemo(
+    () => layoutTree(snapshot.root),
+    [snapshot.root],
+  );
+
+  const nodes: Node<NodeData>[] = useMemo(
+    () =>
+      laidNodes.map((n) => {
+        const ann =
+          n.kind === 'choice' ? annotateChoicesFor(graph, snapshot, n.uid) : [];
+
+        return {
+          id: String(n.uid),
+          type: 'praxis',
+          position: { x: n.x, y: n.y },
+          data: {
+            b: n,
+            active: n.uid === snapshot.activeUid,
+            choices:
+              n.kind === 'choice' ? choicesFor(graph, n.graphTrieId).length : 0,
+            feasibleChoices: ann.filter((x) => x.feasible).length,
+            meta,
+            graph,
+          },
+          draggable: false,
+        };
+      }),
+    [laidNodes, snapshot, graph, meta],
+  );
+
+  const edges: Edge[] = useMemo(
+    () =>
+      laidEdges.map((e) => ({
+        id: e.id,
+        source: String(e.source),
+        target: String(e.target),
+        label: e.label,
+        type: 'straight',
+        animated: false,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        labelBgPadding: [8, 5] as [number, number],
+        labelBgBorderRadius: 999,
+        style: {
+          strokeWidth: 2.0,
+        },
+        labelStyle: {
+          fontWeight: 800,
+          fontSize: 11,
+        },
+      })),
+    [laidEdges],
+  );
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      rf.fitView({ padding: 0.22, duration: 450 });
+    }, 40);
+
+    return () => window.clearTimeout(t);
+  }, [nodes.length, rf]);
+
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      nodeOrigin={[0.5, 0]}
+      minZoom={0.12}
+      maxZoom={2.2}
+      fitView
+      fitViewOptions={{ padding: 0.22 }}
+      onNodeClick={(_, node) => {
+        const b = (node.data as NodeData).b;
+
+        if (b.kind === 'choice') {
+          setSnapshot({ ...snapshot, activeUid: b.uid });
+        } else {
+          pushHistory();
+          setSnapshot(rewind(snapshot, b.uid));
+        }
+      }}
+    >
+      <Background gap={26} size={1.1} color="#d8e2ec" />
+      <Controls />
+    </ReactFlow>
+  );
+}
+
+function App() {
+  const payload = window.PRAXIS_BUILDER_PAYLOAD;
+
+  const graph =
+    window.PRAXIS_ANDOR_GRAPH ??
+    payload?.graph ??
+    sampleGraph;
+
+  const meta = coerceMeta(payload);
+
+  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => makeRoot(graph));
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
+
+  const active = findNode(snapshot.root, snapshot.activeUid);
+
+  const pushHistory = () => {
+    setHistory((h) => [...h, cloneSnapshot(snapshot)]);
+  };
+
+  const setWithHistory = (next: HistorySnapshot) => {
+    if (next === snapshot) return;
+
+    pushHistory();
+    setSnapshot(next);
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="canvas-card">
+        <div className="canvas-header">
+          <div>
+            <h1>Interactive Rashomon Tree Builder</h1>
+            <p>
+              Choose splits in a decision tree while preserving a near-optimality guarantee.
+            </p>
+          </div>
+
+          <div className={`status ${isComplete(snapshot.root) ? 'done' : ''}`}>
+            {isComplete(snapshot.root) ? 'complete' : 'building'}
+          </div>
+        </div>
+
+        <ReactFlowProvider>
+          <div className="flow-wrap">
+            <FlowView
+              graph={graph}
+              meta={meta}
+              snapshot={snapshot}
+              setSnapshot={setSnapshot}
+              pushHistory={pushHistory}
+            />
+          </div>
+        </ReactFlowProvider>
+      </div>
+
+      <SidePanel
+        graph={graph}
+        meta={meta}
+        snapshot={snapshot}
+        active={active}
+        canUndo={history.length > 0}
+        onUndo={() => {
+          const last = history[history.length - 1];
+          if (!last) return;
+
+          setHistory((h) => h.slice(0, -1));
+          setSnapshot(last);
+        }}
+        onReset={() => {
+          pushHistory();
+          setSnapshot(makeRoot(graph));
+        }}
+        onSetActive={(uid) => setSnapshot({ ...snapshot, activeUid: uid })}
+        onApplyLeaf={(leafId) => {
+          if (!active) return;
+          setWithHistory(applyLeaf(snapshot, graph, active.uid, leafId));
+        }}
+        onApplySplit={(splitId) => {
+          if (!active) return;
+          setWithHistory(applySplit(snapshot, graph, active.uid, splitId));
+        }}
+      />
+    </div>
+  );
+}
+
+const rootElement = document.getElementById('root');
+
+if (!rootElement) {
+  throw new Error('Missing #root element.');
+}
+
+createRoot(rootElement).render(<App />);
