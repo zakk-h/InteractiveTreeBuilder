@@ -246,7 +246,7 @@ function leafMisclassificationRate(
   return `${stripZeros(pct.toFixed(2))}% err`;
 }
 
-function PraxisNode({ data }: { data: NodeData,  }) {
+function PraxisNode({ data }: { data: NodeData }) {
   const {
     b,
     active,
@@ -815,7 +815,7 @@ function SidePanel({
                         graph={graph}
                         meta={meta}
                         thresholdDecimals={thresholdDecimals}
-                    onClick={() => onApplySplit(x.choice.split.id)}
+                        onClick={() => onApplySplit(x.choice.split.id)}
                       />
                     ) : null,
                   )}
