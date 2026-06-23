@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type Dispatch, type SetStateAction, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ReactFlow,
-  Background,
   Controls,
   Handle,
   Position,
@@ -21,6 +20,7 @@ import {
   Download,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Undo2,
   Upload,
@@ -86,6 +86,20 @@ declare global {
   }
 }
 
+type BuilderColors = {
+  splitNode: string;
+  leafNode: string;
+  edge: string;
+  background: string;
+};
+
+type BuilderUi = {
+  labelNames: Record<string, string>;
+  featureNames: Record<string, string>;
+  groupNames: Record<string, string>;
+  colors: BuilderColors;
+};
+
 type NodeData = {
   b: BuildNode;
   active: boolean;
@@ -94,7 +108,68 @@ type NodeData = {
   meta: FeatureMeta & Record<string, unknown>;
   graph: AndOrGraph;
   thresholdDecimals: number;
+  ui: BuilderUi;
 };
+
+const DEFAULT_COLORS: BuilderColors = {
+  splitNode: '#ffffff',
+  leafNode: '#f0fdf4',
+  edge: '#8da2b8',
+  background: '#fbfdff',
+};
+
+const BINARY_GROUP_LABEL = 'Binary / already-binarized features';
+
+function makeDefaultUi(): BuilderUi {
+  return {
+    labelNames: {},
+    featureNames: {},
+    groupNames: {},
+    colors: { ...DEFAULT_COLORS },
+  };
+}
+
+function predictionLabel(prediction: number | undefined, ui: BuilderUi): string {
+  if (prediction === undefined || prediction === null) return 'predict —';
+
+  const custom = ui.labelNames[String(prediction)]?.trim();
+  return custom || `predict ${prediction}`;
+}
+
+function continuousGroupEntries(meta: FeatureMeta): Array<{ key: string; features: number[] }> {
+  const g = meta.continuousGroups;
+
+  if (!g) return [];
+
+  if (Array.isArray(g)) {
+    return g.map((features, i) => ({
+      key: `group_${i}`,
+      features,
+    }));
+  }
+
+  return Object.entries(g).map(([key, features]) => ({
+    key,
+    features,
+  }));
+}
+
+function allSplitFeatures(graph: AndOrGraph): number[] {
+  return Array.from(new Set(graph.split_nodes.map((s) => s.feature))).sort((a, b) => a - b);
+}
+
+function customGroupName(group: string, ui: BuilderUi): string {
+  return ui.groupNames[group]?.trim() || group;
+}
+
+function customFeatureName(feature: number, meta: FeatureMeta, ui: BuilderUi): string {
+  return ui.featureNames[String(feature)]?.trim() || featureLabel(feature, meta);
+}
+
+function displayGroupName(feature: number, meta: FeatureMeta, ui: BuilderUi): string | undefined {
+  const group = groupName(feature, meta);
+  return group ? customGroupName(group, ui) : undefined;
+}
 
 function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as HistorySnapshot;
@@ -176,14 +251,19 @@ function prettySplitLabel(
   feature: number,
   meta: FeatureMeta,
   thresholdDecimals = 3,
+  ui: BuilderUi = makeDefaultUi(),
 ): string {
   const group = groupName(feature, meta);
 
   if (group) {
-    return `${compactFeatureName(group)} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
+    return `${compactFeatureName(customGroupName(group, ui))} ≤ ${prettyThresholdLabel(
+      feature,
+      meta,
+      thresholdDecimals,
+    )}`;
   }
 
-  const raw = featureLabel(feature, meta);
+  const raw = customFeatureName(feature, meta, ui);
 
   const formatted = raw.replace(
     /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
@@ -197,14 +277,19 @@ function fullSplitLabel(
   feature: number,
   meta: FeatureMeta,
   thresholdDecimals = 3,
+  ui: BuilderUi = makeDefaultUi(),
 ): string {
   const group = groupName(feature, meta);
 
   if (group) {
-    return `${group} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
+    return `${customGroupName(group, ui)} ≤ ${prettyThresholdLabel(
+      feature,
+      meta,
+      thresholdDecimals,
+    )}`;
   }
 
-  return featureLabel(feature, meta).replace(
+  return customFeatureName(feature, meta, ui).replace(
     /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
     (_match, op, value) => `${op} ${formatThresholdValue(value, thresholdDecimals)}`,
   );
@@ -267,7 +352,7 @@ function leafMisclassificationRate(
 }
 
 function PraxisNode({ data }: { data: NodeData }) {
-  const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
+  const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals, ui } = data;
 
   const icon =
     b.kind === 'split' || b.kind === 'leaf' ? null : (
@@ -276,9 +361,9 @@ function PraxisNode({ data }: { data: NodeData }) {
 
   const title =
     b.kind === 'split'
-      ? prettySplitLabel(b.feature, meta, thresholdDecimals)
+      ? prettySplitLabel(b.feature, meta, thresholdDecimals, ui)
       : b.kind === 'leaf'
-        ? `predict ${b.prediction}`
+        ? predictionLabel(b.prediction, ui)
         : `${feasibleChoices}/${choices} choices`;
 
   const subtitle =
@@ -299,7 +384,7 @@ function PraxisNode({ data }: { data: NodeData }) {
       <div className="node-copy">
         <div
           className="node-title"
-          title={b.kind === 'split' ? fullSplitLabel(b.feature, meta, thresholdDecimals) : title}
+          title={b.kind === 'split' ? fullSplitLabel(b.feature, meta, thresholdDecimals, ui) : title}
         >
           {title}
         </div>
@@ -354,12 +439,14 @@ function SplitButton({
   graph,
   meta,
   thresholdDecimals,
+  ui,
   onClick,
 }: {
   annotated: ChoiceBudget;
   graph: AndOrGraph;
   meta: FeatureMeta & Record<string, unknown>;
   thresholdDecimals: number;
+  ui: BuilderUi;
   onClick: () => void;
 }) {
   const { choice, objective, feasible, excess } = annotated;
@@ -389,7 +476,7 @@ function SplitButton({
         )}
 
         <div className="choice-card-main">
-          Leaf prediction {choice.leaf.prediction}
+          Leaf prediction {predictionLabel(choice.leaf.prediction, ui)}
         </div>
 
         <div className="choice-card-sub">
@@ -418,7 +505,7 @@ function SplitButton({
         </div>
       )}
 
-      <div className="choice-card-main">{prettySplitLabel(f, meta, thresholdDecimals)}</div>
+      <div className="choice-card-main">{prettySplitLabel(f, meta, thresholdDecimals, ui)}</div>
 
       <div className="choice-card-sub">
         obj {formatObjective(graph, objective)} · feature {f} · split #
@@ -435,6 +522,7 @@ function SidePanel({
   snapshot,
   active,
   thresholdDecimals,
+  ui,
   onApplySplit,
   onApplyLeaf,
   onSetActive,
@@ -447,6 +535,7 @@ function SidePanel({
   snapshot: HistorySnapshot;
   active?: BuildNode;
   thresholdDecimals: number;
+  ui: BuilderUi;
   onApplySplit: (splitId: number) => void;
   onApplyLeaf: (leafId: number) => void;
   onSetActive: (uid: number) => void;
@@ -485,7 +574,7 @@ function SidePanel({
     if (!q) return true;
 
     if (c.kind === 'leaf') {
-      return `leaf predict ${c.leaf.prediction} ${leafMisclassificationRate(
+      return `leaf ${predictionLabel(c.leaf.prediction, ui)} ${leafMisclassificationRate(
         graph,
         meta,
         c.leaf.id,
@@ -494,8 +583,8 @@ function SidePanel({
         .includes(q);
     }
 
-    return `${prettySplitLabel(c.split.feature, meta, thresholdDecimals)} ${
-      groupName(c.split.feature, meta) ?? ''
+    return `${prettySplitLabel(c.split.feature, meta, thresholdDecimals, ui)} ${
+      displayGroupName(c.split.feature, meta, ui) ?? ''
     } ${prettyThresholdLabel(c.split.feature, meta, thresholdDecimals)} objective ${formatObjective(
       graph,
       x.objective,
@@ -513,8 +602,8 @@ function SidePanel({
     for (const c of allXs) {
       if (c.choice.kind === 'split') {
         const key =
-          groupName(c.choice.split.feature, meta) ??
-          'Binary / already-binarized features';
+          displayGroupName(c.choice.split.feature, meta, ui) ??
+          BINARY_GROUP_LABEL;
         totalByGroup.set(key, (totalByGroup.get(key) ?? 0) + 1);
       }
     }
@@ -524,8 +613,8 @@ function SidePanel({
         leaves.push(c);
       } else {
         const key =
-          groupName(c.choice.split.feature, meta) ??
-          'Binary / already-binarized features';
+          displayGroupName(c.choice.split.feature, meta, ui) ??
+          BINARY_GROUP_LABEL;
 
         grouped.set(key, [...(grouped.get(key) ?? []), c]);
       }
@@ -550,7 +639,7 @@ function SidePanel({
         validCount: sorted.length,
         totalCount: totalByGroup.get(name) ?? sorted.length,
         bestObjective,
-        collapsed: name !== 'Binary / already-binarized features' && sorted.length > 4,
+        collapsed: name !== BINARY_GROUP_LABEL && sorted.length > 4,
       };
     });
 
@@ -748,6 +837,7 @@ function SidePanel({
                     graph={graph}
                     meta={meta}
                     thresholdDecimals={thresholdDecimals}
+                    ui={ui}
                     onClick={() => onApplyLeaf(x.choice.leaf.id)}
                   />
                 ) : null,
@@ -824,6 +914,7 @@ function SidePanel({
                         graph={graph}
                         meta={meta}
                         thresholdDecimals={thresholdDecimals}
+                        ui={ui}
                         onClick={() => onApplySplit(x.choice.split.id)}
                       />
                     ) : null,
@@ -840,11 +931,223 @@ function SidePanel({
   );
 }
 
+function BuilderSettingsMenu({
+  graph,
+  meta,
+  ui,
+  setUi,
+}: {
+  graph: AndOrGraph;
+  meta: FeatureMeta & Record<string, unknown>;
+  ui: BuilderUi;
+  setUi: Dispatch<SetStateAction<BuilderUi>>;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const labels = useMemo(
+    () =>
+      Array.from(new Set(graph.leaf_nodes.map((leaf) => leaf.prediction))).sort(
+        (a, b) => a - b,
+      ),
+    [graph],
+  );
+
+  const groups = useMemo(() => continuousGroupEntries(meta), [meta]);
+
+  const binaryFeatures = useMemo(() => {
+    const grouped = new Set(groups.flatMap((g) => g.features));
+    return allSplitFeatures(graph).filter((feature) => !grouped.has(feature));
+  }, [graph, groups]);
+
+  const updateLabelName = (prediction: number, value: string) => {
+    setUi((cur) => ({
+      ...cur,
+      labelNames: {
+        ...cur.labelNames,
+        [String(prediction)]: value,
+      },
+    }));
+  };
+
+  const updateGroupName = (group: string, value: string) => {
+    setUi((cur) => ({
+      ...cur,
+      groupNames: {
+        ...cur.groupNames,
+        [group]: value,
+      },
+    }));
+  };
+
+  const updateFeatureName = (feature: number, value: string) => {
+    setUi((cur) => ({
+      ...cur,
+      featureNames: {
+        ...cur.featureNames,
+        [String(feature)]: value,
+      },
+    }));
+  };
+
+  const updateColor = (key: keyof BuilderColors, value: string) => {
+    setUi((cur) => ({
+      ...cur,
+      colors: {
+        ...cur.colors,
+        [key]: value,
+      },
+    }));
+  };
+
+  const resetNames = () => {
+    setUi((cur) => ({
+      ...cur,
+      labelNames: {},
+      featureNames: {},
+      groupNames: {},
+    }));
+  };
+
+  const resetColors = () => {
+    setUi((cur) => ({
+      ...cur,
+      colors: { ...DEFAULT_COLORS },
+    }));
+  };
+
+  return (
+    <div className="settings-wrap">
+      <button className="ghost-button" onClick={() => setOpen((x) => !x)}>
+        <SlidersHorizontal size={15} /> Customize
+      </button>
+
+      {open && (
+        <div className="settings-popover">
+          <div className="settings-header">
+            <div>
+              <b>Customize UI</b>
+              <span>Names and colors only affect display.</span>
+            </div>
+
+            <button className="mini-button" onClick={() => setOpen(false)}>
+              Done
+            </button>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">Label names</div>
+
+            {labels.map((prediction) => (
+              <label className="settings-row" key={`label-${prediction}`}>
+                <span>class {prediction}</span>
+                <input
+                  value={ui.labelNames[String(prediction)] ?? ''}
+                  placeholder={`predict ${prediction}`}
+                  onChange={(e) => updateLabelName(prediction, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">Continuous feature names</div>
+
+            {groups.length === 0 && (
+              <div className="settings-empty">No continuous groups in this payload.</div>
+            )}
+
+            {groups.map((group) => (
+              <label className="settings-row" key={`group-${group.key}`}>
+                <span>{group.key}</span>
+                <input
+                  value={ui.groupNames[group.key] ?? ''}
+                  placeholder={group.key}
+                  onChange={(e) => updateGroupName(group.key, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">Independent binary feature names</div>
+
+            {binaryFeatures.length === 0 && (
+              <div className="settings-empty">No independent binary features in this payload.</div>
+            )}
+
+            {binaryFeatures.map((feature) => (
+              <label className="settings-row" key={`feature-${feature}`}>
+                <span>feature {feature}</span>
+                <input
+                  value={ui.featureNames[String(feature)] ?? ''}
+                  placeholder={featureLabel(feature, meta)}
+                  onChange={(e) => updateFeatureName(feature, e.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">Colors</div>
+
+            <label className="settings-row color-row">
+              <span>split nodes</span>
+              <input
+                type="color"
+                value={ui.colors.splitNode}
+                onChange={(e) => updateColor('splitNode', e.target.value)}
+              />
+            </label>
+
+            <label className="settings-row color-row">
+              <span>leaves</span>
+              <input
+                type="color"
+                value={ui.colors.leafNode}
+                onChange={(e) => updateColor('leafNode', e.target.value)}
+              />
+            </label>
+
+            <label className="settings-row color-row">
+              <span>edges</span>
+              <input
+                type="color"
+                value={ui.colors.edge}
+                onChange={(e) => updateColor('edge', e.target.value)}
+              />
+            </label>
+
+            <label className="settings-row color-row">
+              <span>background</span>
+              <input
+                type="color"
+                value={ui.colors.background}
+                onChange={(e) => updateColor('background', e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="settings-actions">
+            <button className="mini-button" onClick={resetNames}>
+              Reset names
+            </button>
+
+            <button className="mini-button" onClick={resetColors}>
+              Reset colors
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FlowView({
   graph,
   meta,
   snapshot,
   thresholdDecimals,
+  ui,
   setSnapshot,
   pushHistory,
 }: {
@@ -852,6 +1155,7 @@ function FlowView({
   meta: FeatureMeta & Record<string, unknown>;
   snapshot: HistorySnapshot;
   thresholdDecimals: number;
+  ui: BuilderUi;
   setSnapshot: (s: HistorySnapshot) => void;
   pushHistory: () => void;
 }) {
@@ -881,11 +1185,12 @@ function FlowView({
             meta,
             graph,
             thresholdDecimals,
+            ui,
           },
           draggable: false,
         };
       }),
-    [laidNodes, snapshot, graph, meta, thresholdDecimals],
+    [laidNodes, snapshot, graph, meta, thresholdDecimals, ui],
   );
 
   const edges: Edge[] = useMemo(
@@ -897,18 +1202,19 @@ function FlowView({
         label: e.label,
         type: 'straight',
         animated: false,
-        markerEnd: { type: MarkerType.ArrowClosed },
+        markerEnd: { type: MarkerType.ArrowClosed, color: ui.colors.edge },
         labelBgPadding: [16, 11] as [number, number],
         labelBgBorderRadius: 999,
         style: {
           strokeWidth: 4.0,
+          stroke: ui.colors.edge,
         },
         labelStyle: {
           fontWeight: 950,
           fontSize: 34,
         },
       })),
-    [laidEdges],
+    [laidEdges, ui.colors.edge],
   );
 
   useEffect(() => {
@@ -940,7 +1246,6 @@ function FlowView({
         }
       }}
     >
-      <Background gap={26} size={1.1} color="#d8e2ec" />
       <Controls />
     </ReactFlow>
   );
@@ -961,6 +1266,7 @@ function App() {
   const [payloadName, setPayloadName] = useState<string>('embedded PRAXIS graph');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
+  const [ui, setUi] = useState<BuilderUi>(() => makeDefaultUi());
 
   const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => autoExpandSingletons(makeRoot(initialGraph), initialGraph));
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
@@ -984,6 +1290,7 @@ function App() {
     setHistory([]);
     setPayloadName(name);
     setUploadError(null);
+    setUi(makeDefaultUi());
   };
 
   const pushHistory = () => {
@@ -997,8 +1304,15 @@ function App() {
     setSnapshot(next);
   };
 
+  const themeStyle = {
+    '--builder-bg': ui.colors.background,
+    '--split-node-bg': ui.colors.splitNode,
+    '--leaf-node-bg': ui.colors.leafNode,
+    '--edge-color': ui.colors.edge,
+  } as CSSProperties;
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={themeStyle}>
       <div className="canvas-card">
         <div className="canvas-header">
           <div>
@@ -1022,6 +1336,13 @@ function App() {
                 onChange={(e) => setThresholdDecimals(Number(e.target.value))}
               />
             </label>
+
+            <BuilderSettingsMenu
+              graph={graph}
+              meta={meta}
+              ui={ui}
+              setUi={setUi}
+            />
 
             <label className="ghost-button upload-button">
               <Upload size={15} /> Upload
@@ -1062,6 +1383,7 @@ function App() {
               meta={meta}
               snapshot={snapshot}
               thresholdDecimals={thresholdDecimals}
+              ui={ui}
               setSnapshot={setSnapshot}
               pushHistory={pushHistory}
             />
@@ -1075,6 +1397,7 @@ function App() {
         snapshot={snapshot}
         active={active}
         thresholdDecimals={thresholdDecimals}
+        ui={ui}
         canUndo={history.length > 0}
         onUndo={() => {
           const last = history[history.length - 1];
