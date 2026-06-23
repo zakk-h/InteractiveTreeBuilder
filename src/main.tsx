@@ -958,7 +958,7 @@ function App() {
 
   const [graph, setGraph] = useState<AndOrGraph>(initialGraph);
   const [meta, setMeta] = useState<FeatureMeta & Record<string, unknown>>(initialMeta);
-  const [payloadName, setPayloadName] = useState<string>('sample payload');
+  const [payloadName, setPayloadName] = useState<string>('embedded PRAXIS graph');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
 
