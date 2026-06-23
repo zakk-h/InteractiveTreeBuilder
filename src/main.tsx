@@ -94,6 +94,7 @@ type NodeData = {
   feasibleChoices: number;
   meta: FeatureMeta & Record<string, unknown>;
   graph: AndOrGraph;
+  thresholdDecimals: number;
 };
 
 function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
@@ -149,32 +150,40 @@ function stripZeros(x: string): string {
   return x.replace(/\.?0+$/, '');
 }
 
-function formatThresholdValue(value: unknown): string {
+function formatThresholdValue(value: unknown, decimals = 3): string {
   const num = Number(value);
 
   if (Number.isFinite(num)) {
-    return stripZeros(num.toFixed(3));
+    return stripZeros(num.toFixed(decimals));
   }
 
   return String(value);
 }
 
-function prettyThresholdLabel(feature: number, meta: FeatureMeta): string {
-  return formatThresholdValue(thresholdLabel(feature, meta));
+function prettyThresholdLabel(
+  feature: number,
+  meta: FeatureMeta,
+  thresholdDecimals = 3,
+): string {
+  return formatThresholdValue(thresholdLabel(feature, meta), thresholdDecimals);
 }
 
-function prettySplitLabel(feature: number, meta: FeatureMeta): string {
+function prettySplitLabel(
+  feature: number,
+  meta: FeatureMeta,
+  thresholdDecimals = 3,
+): string {
   const group = groupName(feature, meta);
 
   if (group) {
-    return `${group} ≤ ${prettyThresholdLabel(feature, meta)}`;
+    return `${group} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
   }
 
   const raw = featureLabel(feature, meta);
 
   return raw.replace(
     /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
-    (_match, op, value) => `${op} ${formatThresholdValue(value)}`,
+    (_match, op, value) => `${op} ${formatThresholdValue(value, thresholdDecimals)}`,
   );
 }
 
@@ -231,11 +240,11 @@ function leafMisclassificationRate(
   const mistakes = Math.max(0, Number(leaf.loss) - gamma);
   const pct = (100 * mistakes) / Number(leaf.subproblem_size);
 
-  return `${stripZeros(pct.toFixed(1))}% err`;
+  return `${stripZeros(pct.toFixed(2))}% err`;
 }
 
-function PraxisNode({ data }: { data: NodeData }) {
-  const { b, active, choices, feasibleChoices, meta, graph } = data;
+function PraxisNode({ data }: { data: NodeData,  }) {
+  const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
 
   const icon =
     b.kind === 'split' ? (
@@ -248,7 +257,7 @@ function PraxisNode({ data }: { data: NodeData }) {
 
   const title =
     b.kind === 'split'
-      ? prettySplitLabel(b.feature, meta)
+      ? prettySplitLabel(b.feature, meta, thresholdDecimals)
       : b.kind === 'leaf'
         ? `predict ${b.prediction}`
         : `${feasibleChoices}/${choices} choices`;
@@ -322,11 +331,13 @@ function SplitButton({
   annotated,
   graph,
   meta,
+  thresholdDecimals,
   onClick,
 }: {
   annotated: ChoiceBudget;
   graph: AndOrGraph;
   meta: FeatureMeta & Record<string, unknown>;
+  thresholdDecimals: number;
   onClick: () => void;
 }) {
   const { choice, objective, feasible, excess } = annotated;
@@ -385,7 +396,7 @@ function SplitButton({
         </div>
       )}
 
-      <div className="choice-card-main">{prettySplitLabel(f, meta)}</div>
+      <div className="choice-card-main">{prettySplitLabel(f, meta, thresholdDecimals)}</div>
 
       <div className="choice-card-sub">
         obj {formatObjective(graph, objective)} · feature {f} · split #
@@ -401,6 +412,7 @@ function SidePanel({
   meta,
   snapshot,
   active,
+  thresholdDecimals,
   onApplySplit,
   onApplyLeaf,
   onSetActive,
@@ -412,6 +424,7 @@ function SidePanel({
   meta: FeatureMeta & Record<string, unknown>;
   snapshot: HistorySnapshot;
   active?: BuildNode;
+  thresholdDecimals: number;
   onApplySplit: (splitId: number) => void;
   onApplyLeaf: (leafId: number) => void;
   onSetActive: (uid: number) => void;
@@ -459,9 +472,9 @@ function SidePanel({
         .includes(q);
     }
 
-    return `${prettySplitLabel(c.split.feature, meta)} ${
+    return `${prettySplitLabel(c.split.feature, meta, thresholdDecimals)} ${
       groupName(c.split.feature, meta) ?? ''
-    } ${prettyThresholdLabel(c.split.feature, meta)} objective ${formatObjective(
+    } ${prettyThresholdLabel(c.split.feature, meta, thresholdDecimals)} objective ${formatObjective(
       graph,
       x.objective,
     )}`
@@ -488,8 +501,8 @@ function SidePanel({
     const sorted = [...xs].sort((a, b) => {
       if (a.choice.kind !== 'split' || b.choice.kind !== 'split') return 0;
 
-      return prettyThresholdLabel(a.choice.split.feature, meta).localeCompare(
-        prettyThresholdLabel(b.choice.split.feature, meta),
+      return prettyThresholdLabel(a.choice.split.feature, meta, thresholdDecimals).localeCompare(
+        prettyThresholdLabel(b.choice.split.feature, meta, thresholdDecimals),
         undefined,
         { numeric: true },
       );
@@ -689,6 +702,7 @@ function SidePanel({
                     annotated={x}
                     graph={graph}
                     meta={meta}
+                    thresholdDecimals={thresholdDecimals}
                     onClick={() => onApplyLeaf(x.choice.leaf.id)}
                   />
                 ) : null,
@@ -769,7 +783,8 @@ function SidePanel({
                         annotated={x}
                         graph={graph}
                         meta={meta}
-                        onClick={() => onApplySplit(x.choice.split.id)}
+                        thresholdDecimals={thresholdDecimals}
+                    onClick={() => onApplySplit(x.choice.split.id)}
                       />
                     ) : null,
                   )}
@@ -787,12 +802,14 @@ function FlowView({
   graph,
   meta,
   snapshot,
+  thresholdDecimals,
   setSnapshot,
   pushHistory,
 }: {
   graph: AndOrGraph;
   meta: FeatureMeta & Record<string, unknown>;
   snapshot: HistorySnapshot;
+  thresholdDecimals: number;
   setSnapshot: (s: HistorySnapshot) => void;
   pushHistory: () => void;
 }) {
@@ -821,11 +838,12 @@ function FlowView({
             feasibleChoices: ann.filter((x) => x.feasible).length,
             meta,
             graph,
+            thresholdDecimals,
           },
           draggable: false,
         };
       }),
-    [laidNodes, snapshot, graph, meta],
+    [laidNodes, snapshot, graph, meta, thresholdDecimals],
   );
 
   const edges: Edge[] = useMemo(
@@ -838,14 +856,14 @@ function FlowView({
         type: 'straight',
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed },
-        labelBgPadding: [8, 5] as [number, number],
+        labelBgPadding: [12, 8] as [number, number],
         labelBgBorderRadius: 999,
         style: {
           strokeWidth: 2.0,
         },
         labelStyle: {
-          fontWeight: 800,
-          fontSize: 11,
+          fontWeight: 950,
+          fontSize: 18,
         },
       })),
     [laidEdges],
@@ -900,6 +918,7 @@ function App() {
   const [meta, setMeta] = useState<FeatureMeta & Record<string, unknown>>(initialMeta);
   const [payloadName, setPayloadName] = useState<string>('sample payload');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [thresholdDecimals, setThresholdDecimals] = useState(3);
 
   const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => makeRoot(initialGraph));
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
@@ -950,6 +969,18 @@ function App() {
           </div>
 
           <div className="header-actions">
+            <label className="decimal-control">
+              <span>Feature decimals: {thresholdDecimals}</span>
+              <input
+                type="range"
+                min={0}
+                max={6}
+                step={1}
+                value={thresholdDecimals}
+                onChange={(e) => setThresholdDecimals(Number(e.target.value))}
+              />
+            </label>
+
             <label className="ghost-button upload-button">
               <Upload size={15} /> Upload
               <input
@@ -988,6 +1019,7 @@ function App() {
               graph={graph}
               meta={meta}
               snapshot={snapshot}
+              thresholdDecimals={thresholdDecimals}
               setSnapshot={setSnapshot}
               pushHistory={pushHistory}
             />
@@ -1000,6 +1032,7 @@ function App() {
         meta={meta}
         snapshot={snapshot}
         active={active}
+        thresholdDecimals={thresholdDecimals}
         canUndo={history.length > 0}
         onUndo={() => {
           const last = history[history.length - 1];
