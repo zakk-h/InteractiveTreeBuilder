@@ -252,23 +252,21 @@ export function autoExpandSingletons(snapshot: HistorySnapshot, graph: AndOrGrap
   let cur = snapshot;
 
   while (true) {
-    const active = findNode(cur.root, cur.activeUid);
+    const singleton = unresolvedNodes(cur.root).find((node) => {
+      const feasibleChoices = annotateChoicesFor(graph, cur, node.uid).filter((x) => x.feasible);
+      return feasibleChoices.length === 1;
+    });
 
-    if (!active || active.kind !== 'choice') {
+    if (!singleton) {
       return cur;
     }
 
-    const feasibleChoices = annotateChoicesFor(graph, cur, active.uid).filter((x) => x.feasible);
-
-    if (feasibleChoices.length !== 1) {
-      return cur;
-    }
-
+    const feasibleChoices = annotateChoicesFor(graph, cur, singleton.uid).filter((x) => x.feasible);
     const only = feasibleChoices[0].choice;
 
     if (only.kind === 'leaf') {
       const next = cloneTree(cur);
-      const n = findNode(next.root, active.uid);
+      const n = findNode(next.root, singleton.uid);
       if (!n || n.kind !== 'choice') return cur;
 
       n.kind = 'leaf';
@@ -285,7 +283,7 @@ export function autoExpandSingletons(snapshot: HistorySnapshot, graph: AndOrGrap
     }
 
     const next = cloneTree(cur);
-    const n = findNode(next.root, active.uid);
+    const n = findNode(next.root, singleton.uid);
     if (!n || n.kind !== 'choice') return cur;
 
     const s = only.split;
@@ -297,7 +295,8 @@ export function autoExpandSingletons(snapshot: HistorySnapshot, graph: AndOrGrap
     n.left = { uid: next.nextUid++, graphTrieId: s.left_trie_id, kind: 'choice' };
     n.right = { uid: next.nextUid++, graphTrieId: s.right_trie_id, kind: 'choice' };
 
-    next.activeUid = n.left.uid;
+    const unresolved = unresolvedNodes(next.root);
+    next.activeUid = unresolved[0]?.uid ?? n.uid;
     cur = next;
   }
 }

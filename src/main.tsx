@@ -58,6 +58,7 @@ import {
   thresholdLabel,
   treePaths,
   unresolvedNodes,
+  autoExpandSingletons
 } from './graphUtils';
 
 import { layoutTree } from './layout';
@@ -920,7 +921,7 @@ function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
 
-  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => makeRoot(initialGraph));
+  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => autoExpandSingletons(makeRoot(initialGraph), initialGraph));
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
 
   const active = findNode(snapshot.root, snapshot.activeUid);
@@ -938,7 +939,7 @@ function App() {
 
     setGraph(nextGraph);
     setMeta(nextMeta);
-    setSnapshot(makeRoot(nextGraph));
+    setSnapshot(autoExpandSingletons(makeRoot(nextGraph), nextGraph));
     setHistory([]);
     setPayloadName(name);
     setUploadError(null);
@@ -1043,7 +1044,7 @@ function App() {
         }}
         onReset={() => {
           pushHistory();
-          setSnapshot(makeRoot(graph));
+          setSnapshot(autoExpandSingletons(makeRoot(graph), graph));
         }}
         onSetActive={(uid) => setSnapshot({ ...snapshot, activeUid: uid })}
         onApplyLeaf={(leafId) => {
