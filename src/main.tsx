@@ -17,7 +17,6 @@ import '@xyflow/react/dist/style.css';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Ban,
-  Leaf,
   CircleDot,
   Download,
   RotateCcw,
@@ -254,9 +253,7 @@ function PraxisNode({ data }: { data: NodeData }) {
   const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
 
   const icon =
-    b.kind === 'split' ? null : b.kind === 'leaf' ? (
-      <Leaf size={30} />
-    ) : (
+    b.kind === 'split' || b.kind === 'leaf' ? null : (
       <CircleDot size={30} />
     );
 

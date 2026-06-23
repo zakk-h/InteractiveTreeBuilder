@@ -682,13 +682,6 @@ input {
 }
 
 
-.praxis-node-leaf {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 14px;
-}
-
 .praxis-node-leaf .node-icon {
   flex: 0 0 46px;
 }
@@ -702,4 +695,24 @@ input {
 .praxis-node-leaf .node-subtitle {
   max-width: none;
   text-align: left;
+}
+
+
+.praxis-node-leaf {
+  grid-template-columns: 1fr;
+}
+
+.praxis-node-leaf .node-icon {
+  display: none;
+}
+
+.praxis-node-leaf .node-copy {
+  text-align: center;
+  width: 100%;
+}
+
+.praxis-node-leaf .node-title,
+.praxis-node-leaf .node-subtitle {
+  max-width: 100%;
+  text-align: center;
 }
