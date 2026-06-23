@@ -17,5 +17,8 @@
     "react-dom": "latest",
     "typescript": "latest",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }
