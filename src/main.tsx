@@ -953,7 +953,7 @@ function App() {
 
           <div className="header-actions">
             <label className="ghost-button upload-button">
-              <Upload size={15} /> Upload payload
+              <Upload size={15} /> Upload
               <input
                 type="file"
                 accept=".json,application/json"
