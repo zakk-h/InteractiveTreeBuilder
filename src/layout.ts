@@ -12,9 +12,9 @@ export type LayoutEdge = {
   label: string;
 };
 
-const NODE_WIDTH = 178;
-const NODE_Y_GAP = 142;
-const SIBLING_GAP = 90;
+const NODE_WIDTH = 420;
+const NODE_Y_GAP = 220;
+const SIBLING_GAP = 0;
 
 function measure(node: BuildNode, cache: Map<number, number>): number {
   const cached = cache.get(node.uid);
@@ -51,8 +51,18 @@ function place(
     const lw = widths.get(node.left.uid)!;
     const rw = widths.get(node.right.uid)!;
 
-    edges.push({ id: `${node.uid}-${node.left.uid}`,  source: node.uid, target: node.left.uid,  label: 'T' });
-    edges.push({ id: `${node.uid}-${node.right.uid}`, source: node.uid, target: node.right.uid, label: 'F' });
+    edges.push({
+      id: `${node.uid}-${node.left.uid}`,
+      source: node.uid,
+      target: node.left.uid,
+      label: depth === 0 ? 'T' : '',
+    });
+    edges.push({
+      id: `${node.uid}-${node.right.uid}`,
+      source: node.uid,
+      target: node.right.uid,
+      label: depth === 0 ? 'F' : '',
+    });
 
     place(node.left,  depth + 1, boxLeft,                   widths, pos, edges);
     place(node.right, depth + 1, boxLeft + lw + SIBLING_GAP, widths, pos, edges);
@@ -60,7 +70,12 @@ function place(
   }
 
   if (node.left) {
-    edges.push({ id: `${node.uid}-${node.left.uid}`, source: node.uid, target: node.left.uid, label: 'T' });
+    edges.push({
+      id: `${node.uid}-${node.left.uid}`,
+      source: node.uid,
+      target: node.left.uid,
+      label: depth === 0 ? 'T' : '',
+    });
     const lw = widths.get(node.left.uid)!;
     const childBoxLeft = boxLeft + (w - lw) / 2;
     place(node.left, depth + 1, childBoxLeft, widths, pos, edges);
@@ -68,7 +83,12 @@ function place(
   }
 
   if (node.right) {
-    edges.push({ id: `${node.uid}-${node.right.uid}`, source: node.uid, target: node.right!.uid, label: 'F' });
+    edges.push({
+      id: `${node.uid}-${node.right.uid}`,
+      source: node.uid,
+      target: node.right!.uid,
+      label: depth === 0 ? 'F' : '',
+    });
     const rw = widths.get(node.right!.uid)!;
     const childBoxLeft = boxLeft + (w - rw) / 2;
     place(node.right!, depth + 1, childBoxLeft, widths, pos, edges);
@@ -86,6 +106,60 @@ export function layoutTree(root: BuildNode): {
 
   measure(root, widths);
   place(root, 0, 0, widths, pos, edges);
+
+  function isTerminal(node?: BuildNode): boolean {
+    return !!node && !node.left && !node.right;
+  }
+
+  function pullTerminalChildrenIn(node: BuildNode) {
+    const parent = pos.get(node.uid);
+    if (!parent) return;
+
+    const terminalOffset = NODE_WIDTH * 0.42;
+
+    if (isTerminal(node.left)) {
+      const child = pos.get(node.left!.uid);
+      if (child) child.centerX = parent.centerX - terminalOffset;
+    }
+
+    if (isTerminal(node.right)) {
+      const child = pos.get(node.right!.uid);
+      if (child) child.centerX = parent.centerX + terminalOffset;
+    }
+
+    if (node.left) pullTerminalChildrenIn(node.left);
+    if (node.right) pullTerminalChildrenIn(node.right);
+  }
+
+  function shiftSubtree(node: BuildNode, dx: number) {
+    const p = pos.get(node.uid);
+    if (p) p.centerX += dx;
+    if (node.left) shiftSubtree(node.left, dx);
+    if (node.right) shiftSubtree(node.right, dx);
+  }
+
+  function enforceSiblingMinimums(node: BuildNode) {
+    if (node.left) enforceSiblingMinimums(node.left);
+    if (node.right) enforceSiblingMinimums(node.right);
+
+    if (!node.left || !node.right) return;
+
+    const left = pos.get(node.left.uid);
+    const right = pos.get(node.right.uid);
+    if (!left || !right) return;
+
+    const minCenterGap = NODE_WIDTH * 1.12;
+    const currentGap = right.centerX - left.centerX;
+
+    if (currentGap >= minCenterGap) return;
+
+    const extra = minCenterGap - currentGap;
+    shiftSubtree(node.left, -extra / 2);
+    shiftSubtree(node.right, extra / 2);
+  }
+
+  pullTerminalChildrenIn(root);
+  enforceSiblingMinimums(root);
 
   function collect(node: BuildNode) {
     const p = pos.get(node.uid);

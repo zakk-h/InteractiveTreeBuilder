@@ -17,10 +17,9 @@ import '@xyflow/react/dist/style.css';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Ban,
-  Check,
+  Leaf,
   CircleDot,
   Download,
-  GitBranch,
   RotateCcw,
   Search,
   Sparkles,
@@ -248,12 +247,10 @@ function PraxisNode({ data }: { data: NodeData }) {
   const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
 
   const icon =
-    b.kind === 'split' ? (
-      <GitBranch size={15} />
-    ) : b.kind === 'leaf' ? (
-      <Check size={15} />
+    b.kind === 'split' ? null : b.kind === 'leaf' ? (
+      <Leaf size={30} />
     ) : (
-      <CircleDot size={15} />
+      <CircleDot size={30} />
     );
 
   const title =
@@ -265,7 +262,7 @@ function PraxisNode({ data }: { data: NodeData }) {
 
   const subtitle =
     b.kind === 'split'
-      ? `split #${b.splitId}`
+      ? ''
       : b.kind === 'leaf'
         ? leafMisclassificationRate(graph, meta, b.leafId)
         : `best ${formatObjective(graph, lowerBound(graph, b))}`;
@@ -282,7 +279,7 @@ function PraxisNode({ data }: { data: NodeData }) {
         <div className="node-title" title={title}>
           {title}
         </div>
-        <div className="node-subtitle">{subtitle}</div>
+        {subtitle && <div className="node-subtitle">{subtitle}</div>}
       </div>
 
       {b.kind === 'choice' && <div className="choice-pill">{feasibleChoices}</div>}
@@ -877,14 +874,14 @@ function FlowView({
         type: 'straight',
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed },
-        labelBgPadding: [12, 8] as [number, number],
+        labelBgPadding: [16, 11] as [number, number],
         labelBgBorderRadius: 999,
         style: {
-          strokeWidth: 2.0,
+          strokeWidth: 4.0,
         },
         labelStyle: {
           fontWeight: 950,
-          fontSize: 18,
+          fontSize: 34,
         },
       })),
     [laidEdges],
