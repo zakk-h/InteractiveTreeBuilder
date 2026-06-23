@@ -25,6 +25,7 @@ import {
   Search,
   Sparkles,
   Undo2,
+  Upload,
 } from 'lucide-react';
 
 import type {
@@ -302,6 +303,23 @@ function downloadJson(name: string, x: unknown) {
   URL.revokeObjectURL(url);
 }
 
+function readJsonFile(file: File): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      try {
+        resolve(JSON.parse(String(reader.result)));
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
 function SplitButton({
   annotated,
   graph,
@@ -517,7 +535,7 @@ function SidePanel({
         </div>
         <div>
           <div className="brand-title">PRAXIS Tree Builder</div>
-          <div className="brand-subtitle">budget-aware Rashomon construction</div>
+          <div className="brand-subtitle">Guaranteed Rashomon membership</div>
         </div>
       </div>
 
@@ -569,7 +587,7 @@ function SidePanel({
       </div>
 
       <section className="panel-section">
-        <div className="section-title">Frontier</div>
+        <div className="section-title">Remaining Choices</div>
 
         <div className="frontier-list">
           {unresolved.map((n) => {
@@ -871,19 +889,43 @@ function FlowView({
 }
 
 function App() {
-  const payload = window.PRAXIS_BUILDER_PAYLOAD;
+  const initialPayload = window.PRAXIS_BUILDER_PAYLOAD;
 
-  const graph =
+  const initialGraph =
     window.PRAXIS_ANDOR_GRAPH ??
-    payload?.graph ??
+    initialPayload?.graph ??
     sampleGraph;
 
-  const meta = coerceMeta(payload);
+  const initialMeta = coerceMeta(initialPayload);
 
-  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => makeRoot(graph));
+  const [graph, setGraph] = useState<AndOrGraph>(initialGraph);
+  const [meta, setMeta] = useState<FeatureMeta & Record<string, unknown>>(initialMeta);
+  const [payloadName, setPayloadName] = useState<string>('sample payload');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => makeRoot(initialGraph));
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
 
   const active = findNode(snapshot.root, snapshot.activeUid);
+
+  const loadPayload = (raw: unknown, name: string) => {
+    const payload = raw as Window['PRAXIS_BUILDER_PAYLOAD'];
+
+    const nextGraph = payload?.graph;
+
+    if (!nextGraph) {
+      throw new Error('Payload must contain a top-level "graph" field.');
+    }
+
+    const nextMeta = coerceMeta(payload);
+
+    setGraph(nextGraph);
+    setMeta(nextMeta);
+    setSnapshot(makeRoot(nextGraph));
+    setHistory([]);
+    setPayloadName(name);
+    setUploadError(null);
+  };
 
   const pushHistory = () => {
     setHistory((h) => [...h, cloneSnapshot(snapshot)]);
@@ -905,10 +947,40 @@ function App() {
             <p>
               Choose splits in a decision tree while preserving a near-optimality guarantee.
             </p>
+            <p className="payload-name">Loaded: {payloadName}</p>
+            {uploadError && <p className="upload-error">{uploadError}</p>}
           </div>
 
-          <div className={`status ${isComplete(snapshot.root) ? 'done' : ''}`}>
-            {isComplete(snapshot.root) ? 'complete' : 'building'}
+          <div className="header-actions">
+            <label className="ghost-button upload-button">
+              <Upload size={15} /> Upload payload
+              <input
+                type="file"
+                accept=".json,application/json"
+                hidden
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = '';
+
+                  if (!file) return;
+
+                  try {
+                    const raw = await readJsonFile(file);
+                    loadPayload(raw, file.name);
+                  } catch (err) {
+                    setUploadError(
+                      err instanceof Error
+                        ? err.message
+                        : 'Could not load payload JSON.',
+                    );
+                  }
+                }}
+              />
+            </label>
+
+            <div className={`status ${isComplete(snapshot.root) ? 'done' : ''}`}>
+              {isComplete(snapshot.root) ? 'complete' : 'building'}
+            </div>
           </div>
         </div>
 

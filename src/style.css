@@ -617,3 +617,27 @@ input {
   border-top: 0;
   padding-top: 0;
 }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-button {
+  cursor: pointer;
+}
+
+.payload-name {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.upload-error {
+  margin-top: 6px;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 800;
+}
