@@ -193,6 +193,23 @@ function prettySplitLabel(
   return compactFeatureName(formatted, 28);
 }
 
+function fullSplitLabel(
+  feature: number,
+  meta: FeatureMeta,
+  thresholdDecimals = 3,
+): string {
+  const group = groupName(feature, meta);
+
+  if (group) {
+    return `${group} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
+  }
+
+  return featureLabel(feature, meta).replace(
+    /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
+    (_match, op, value) => `${op} ${formatThresholdValue(value, thresholdDecimals)}`,
+  );
+}
+
 function gammaRaw(
   graph: AndOrGraph,
   meta: FeatureMeta & Record<string, unknown>,
@@ -282,7 +299,7 @@ function PraxisNode({ data }: { data: NodeData }) {
       <div className="node-copy">
         <div
           className="node-title"
-          title={b.kind === 'split' ? featureLabel(b.feature, meta) : title}
+          title={b.kind === 'split' ? fullSplitLabel(b.feature, meta, thresholdDecimals) : title}
         >
           {title}
         </div>
@@ -987,7 +1004,7 @@ function App() {
           <div>
             <h1>Interactive Rashomon Tree Builder</h1>
             <p>
-              Choose splits in a decision tree while preserving a near-optimality guarantee.
+              Choose from splits that perserve near-optimality.
             </p>
             <p className="payload-name">Loaded: {payloadName}</p>
             {uploadError && <p className="upload-error">{uploadError}</p>}
