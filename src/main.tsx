@@ -89,6 +89,7 @@ declare global {
 type BuilderColors = {
   splitNode: string;
   leafNode: string;
+  leafNodesByClass: Record<string, string>;
   edge: string;
   background: string;
 };
@@ -114,6 +115,7 @@ type NodeData = {
 const DEFAULT_COLORS: BuilderColors = {
   splitNode: '#ffffff',
   leafNode: '#f0fdf4',
+  leafNodesByClass: {},
   edge: '#8da2b8',
   background: '#fbfdff',
 };
@@ -125,7 +127,10 @@ function makeDefaultUi(): BuilderUi {
     labelNames: {},
     featureNames: {},
     groupNames: {},
-    colors: { ...DEFAULT_COLORS },
+    colors: {
+      ...DEFAULT_COLORS,
+      leafNodesByClass: {},
+    },
   };
 }
 
@@ -373,9 +378,19 @@ function PraxisNode({ data }: { data: NodeData }) {
         ? leafMisclassificationRate(graph, meta, b.leafId)
         : `best ${formatObjective(graph, lowerBound(graph, b))}`;
 
+  const nodeStyle =
+    b.kind === 'leaf'
+      ? ({
+          '--leaf-node-bg':
+            ui.colors.leafNodesByClass[String(b.prediction)] ||
+            ui.colors.leafNode,
+        } as CSSProperties)
+      : undefined;
+
   return (
     <div
       className={`praxis-node praxis-node-${b.kind} ${active ? 'active' : ''}`}
+      style={nodeStyle}
     >
       <Handle type="target" position={Position.Top} className="handle" />
 
@@ -989,12 +1004,28 @@ function BuilderSettingsMenu({
     }));
   };
 
-  const updateColor = (key: keyof BuilderColors, value: string) => {
+  const updateColor = (
+    key: Exclude<keyof BuilderColors, 'leafNodesByClass'>,
+    value: string,
+  ) => {
     setUi((cur) => ({
       ...cur,
       colors: {
         ...cur.colors,
         [key]: value,
+      },
+    }));
+  };
+
+  const updateLeafClassColor = (prediction: number, value: string) => {
+    setUi((cur) => ({
+      ...cur,
+      colors: {
+        ...cur.colors,
+        leafNodesByClass: {
+          ...cur.colors.leafNodesByClass,
+          [String(prediction)]: value,
+        },
       },
     }));
   };
@@ -1011,7 +1042,10 @@ function BuilderSettingsMenu({
   const resetColors = () => {
     setUi((cur) => ({
       ...cur,
-      colors: { ...DEFAULT_COLORS },
+      colors: {
+      ...DEFAULT_COLORS,
+      leafNodesByClass: {},
+    },
     }));
   };
 
@@ -1107,6 +1141,20 @@ function BuilderSettingsMenu({
                 onChange={(e) => updateColor('leafNode', e.target.value)}
               />
             </label>
+
+            {labels.map((prediction) => (
+              <label className="settings-row color-row" key={`leaf-color-${prediction}`}>
+                <span>{predictionLabel(prediction, ui)} leaf</span>
+                <input
+                  type="color"
+                  value={
+                    ui.colors.leafNodesByClass[String(prediction)] ||
+                    ui.colors.leafNode
+                  }
+                  onChange={(e) => updateLeafClassColor(prediction, e.target.value)}
+                />
+              </label>
+            ))}
 
             <label className="settings-row color-row">
               <span>edges</span>
