@@ -150,6 +150,11 @@ function stripZeros(x: string): string {
   return x.replace(/\.?0+$/, '');
 }
 
+function compactFeatureName(name: string, maxLen = 19): string {
+  if (name.length <= maxLen) return name;
+  return `${name.slice(0, maxLen).trimEnd()}…`;
+}
+
 function formatThresholdValue(value: unknown, decimals = 3): string {
   const num = Number(value);
 
@@ -176,15 +181,17 @@ function prettySplitLabel(
   const group = groupName(feature, meta);
 
   if (group) {
-    return `${group} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
+    return `${compactFeatureName(group)} ≤ ${prettyThresholdLabel(feature, meta, thresholdDecimals)}`;
   }
 
   const raw = featureLabel(feature, meta);
 
-  return raw.replace(
+  const formatted = raw.replace(
     /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
     (_match, op, value) => `${op} ${formatThresholdValue(value, thresholdDecimals)}`,
   );
+
+  return compactFeatureName(formatted, 28);
 }
 
 function gammaRaw(
@@ -276,7 +283,10 @@ function PraxisNode({ data }: { data: NodeData }) {
       <div className="node-icon">{icon}</div>
 
       <div className="node-copy">
-        <div className="node-title" title={title}>
+        <div
+          className="node-title"
+          title={b.kind === 'split' ? featureLabel(b.feature, meta) : title}
+        >
           {title}
         </div>
         {subtitle && <div className="node-subtitle">{subtitle}</div>}
