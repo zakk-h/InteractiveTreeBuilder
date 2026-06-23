@@ -10,6 +10,7 @@ import {
   type Node,
   MarkerType,
   useReactFlow,
+  useViewport,
   ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -96,6 +97,7 @@ type NodeData = {
   meta: FeatureMeta & Record<string, unknown>;
   graph: AndOrGraph;
   thresholdDecimals: number;
+  legibilityScale: number;
 };
 
 function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
@@ -245,7 +247,16 @@ function leafMisclassificationRate(
 }
 
 function PraxisNode({ data }: { data: NodeData,  }) {
-  const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
+  const {
+    b,
+    active,
+    choices,
+    feasibleChoices,
+    meta,
+    graph,
+    thresholdDecimals,
+    legibilityScale,
+  } = data;
 
   const icon =
     b.kind === 'split' ? (
@@ -273,6 +284,7 @@ function PraxisNode({ data }: { data: NodeData,  }) {
   return (
     <div
       className={`praxis-node praxis-node-${b.kind} ${active ? 'active' : ''}`}
+      style={{ '--legibility-scale': legibilityScale } as React.CSSProperties}
     >
       <Handle type="target" position={Position.Top} className="handle" />
 
@@ -483,47 +495,65 @@ function SidePanel({
       .includes(q);
   });
 
-  const grouped = new Map<string, ChoiceBudget[]>();
-  const leaves: ChoiceBudget[] = [];
+  const makeChoiceGroups = (feasibleXs: ChoiceBudget[], allXs: ChoiceBudget[]) => {
+    const grouped = new Map<string, ChoiceBudget[]>();
+    const totalByGroup = new Map<string, number>();
+    const leaves: ChoiceBudget[] = [];
+    const totalLeaves = allXs.filter((x) => x.choice.kind === 'leaf').length;
 
-  for (const c of filtered) {
-    if (c.choice.kind === 'leaf') {
-      leaves.push(c);
-    } else {
-      const key =
-        groupName(c.choice.split.feature, meta) ??
-        'Binary / already-binarized features';
-
-      grouped.set(key, [...(grouped.get(key) ?? []), c]);
+    for (const c of allXs) {
+      if (c.choice.kind === 'split') {
+        const key =
+          groupName(c.choice.split.feature, meta) ??
+          'Binary / already-binarized features';
+        totalByGroup.set(key, (totalByGroup.get(key) ?? 0) + 1);
+      }
     }
-  }
 
-  const sortedGroupEntries = Array.from(grouped.entries()).map(([name, xs]) => {
-    const sorted = [...xs].sort((a, b) => {
-      if (a.choice.kind !== 'split' || b.choice.kind !== 'split') return 0;
+    for (const c of feasibleXs) {
+      if (c.choice.kind === 'leaf') {
+        leaves.push(c);
+      } else {
+        const key =
+          groupName(c.choice.split.feature, meta) ??
+          'Binary / already-binarized features';
 
-      return prettyThresholdLabel(a.choice.split.feature, meta, thresholdDecimals).localeCompare(
-        prettyThresholdLabel(b.choice.split.feature, meta, thresholdDecimals),
-        undefined,
-        { numeric: true },
-      );
+        grouped.set(key, [...(grouped.get(key) ?? []), c]);
+      }
+    }
+
+    const sortedGroupEntries = Array.from(grouped.entries()).map(([name, choices]) => {
+      const sorted = [...choices].sort((a, b) => {
+        if (a.choice.kind !== 'split' || b.choice.kind !== 'split') return 0;
+
+        return prettyThresholdLabel(a.choice.split.feature, meta, thresholdDecimals).localeCompare(
+          prettyThresholdLabel(b.choice.split.feature, meta, thresholdDecimals),
+          undefined,
+          { numeric: true },
+        );
+      });
+
+      const bestObjective = Math.min(...sorted.map((x) => x.objective));
+
+      return {
+        name,
+        choices: sorted,
+        validCount: sorted.length,
+        totalCount: totalByGroup.get(name) ?? sorted.length,
+        bestObjective,
+        collapsed: name !== 'Binary / already-binarized features' && sorted.length > 4,
+      };
     });
 
-    const feasible = sorted.filter((x) => x.feasible);
-    const bestAny = Math.min(...sorted.map((x) => x.objective));
-    const bestFeasible =
-      feasible.length > 0 ? Math.min(...feasible.map((x) => x.objective)) : undefined;
+    return { leaves, totalLeaves, sortedGroupEntries };
+  };
 
-    return {
-      name,
-      choices: sorted,
-      totalCount: sorted.length,
-      feasibleCount: feasible.length,
-      bestAny,
-      bestFeasible,
-      collapsed: name !== 'Binary / already-binarized features' && sorted.length > 4,
-    };
-  });
+  const feasibleFiltered = filtered.filter((x) => x.feasible);
+
+  const { leaves, totalLeaves, sortedGroupEntries } = makeChoiceGroups(
+    feasibleFiltered,
+    filtered,
+  );
 
   const expandedEntry =
     expandedGroup === null
@@ -694,7 +724,12 @@ function SidePanel({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              <div className="choice-group-title">Leaf options</div>
+              <div className="choice-group-title">
+                Leaf options
+                <span className="choice-group-count">
+                  {leaves.length}/{totalLeaves} valid
+                </span>
+              </div>
 
               {leaves.map((x) =>
                 x.choice.kind === 'leaf' ? (
@@ -725,7 +760,7 @@ function SidePanel({
                   <div className="choice-group-title">
                     {entry.name}
                     <span className="choice-group-count">
-                      {entry.feasibleCount}/{entry.totalCount} feasible
+                      {entry.totalCount} choices
                     </span>
                   </div>
 
@@ -738,16 +773,11 @@ function SidePanel({
                   >
                     <div className="feature-summary-main">
                       <span>Choose threshold</span>
-                      <b>{entry.feasibleCount}/{entry.totalCount}</b>
+                      <b>{entry.validCount}/{entry.totalCount}</b>
                     </div>
 
                     <div className="feature-summary-sub">
-                      best feasible{' '}
-                      {entry.bestFeasible === undefined
-                        ? '—'
-                        : formatObjective(graph, entry.bestFeasible)}
-                      {' · '}
-                      best overall {formatObjective(graph, entry.bestAny)}
+                      best obj {formatObjective(graph, entry.bestObjective)}
                     </div>
 
                     <div className="feature-summary-hint">
@@ -771,7 +801,7 @@ function SidePanel({
                   {entry.name}
                   {expandedEntry && (
                     <span className="choice-group-count">
-                      {entry.feasibleCount}/{entry.totalCount} feasible
+                      {entry.totalCount} choices
                     </span>
                   )}
                 </div>
@@ -795,6 +825,8 @@ function SidePanel({
           })}
         </AnimatePresence>
       </section>
+
+
     </aside>
   );
 }
@@ -815,6 +847,9 @@ function FlowView({
   pushHistory: () => void;
 }) {
   const rf = useReactFlow();
+  const { zoom } = useViewport();
+
+  const legibilityScale = Math.min(1.8, Math.max(1, 1 / Math.max(zoom, 0.55)));
 
   const { nodes: laidNodes, edges: laidEdges } = useMemo(
     () => layoutTree(snapshot.root),
@@ -840,11 +875,12 @@ function FlowView({
             meta,
             graph,
             thresholdDecimals,
+            legibilityScale,
           },
           draggable: false,
         };
       }),
-    [laidNodes, snapshot, graph, meta, thresholdDecimals],
+    [laidNodes, snapshot, graph, meta, thresholdDecimals, legibilityScale],
   );
 
   const edges: Edge[] = useMemo(
@@ -857,17 +893,17 @@ function FlowView({
         type: 'straight',
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed },
-        labelBgPadding: [12, 8] as [number, number],
+        labelBgPadding: [12 * legibilityScale, 8 * legibilityScale] as [number, number],
         labelBgBorderRadius: 999,
         style: {
           strokeWidth: 2.0,
         },
         labelStyle: {
           fontWeight: 950,
-          fontSize: 18,
+          fontSize: 18 * legibilityScale,
         },
       })),
-    [laidEdges],
+    [laidEdges, legibilityScale],
   );
 
   useEffect(() => {

@@ -130,15 +130,15 @@ input {
 
 .praxis-node {
   position: relative;
-  min-height: 58px;
-  width: 178px;
-  min-width: 178px;
-  max-width: 178px;
+  min-height: calc(58px * var(--legibility-scale, 1));
+  width: calc(178px * var(--legibility-scale, 1));
+  min-width: calc(178px * var(--legibility-scale, 1));
+  max-width: calc(178px * var(--legibility-scale, 1));
   border-radius: 15px;
-  padding: 9px 10px;
+  padding: calc(9px * var(--legibility-scale, 1)) calc(10px * var(--legibility-scale, 1));
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: calc(26px * var(--legibility-scale, 1)) minmax(0, 1fr);
+  gap: calc(8px * var(--legibility-scale, 1));
   align-items: center;
   border: 1px solid #d8e2ee;
   background: #ffffff;
@@ -147,7 +147,7 @@ input {
 }
 
 .react-flow__node-praxis {
-  width: 178px;
+  width: auto;
 }
 
 .praxis-node.active {
@@ -172,8 +172,8 @@ input {
 }
 
 .node-icon {
-  width: 26px;
-  height: 26px;
+  width: calc(26px * var(--legibility-scale, 1));
+  height: calc(26px * var(--legibility-scale, 1));
   border-radius: 9px;
   display: grid;
   place-items: center;
@@ -196,11 +196,11 @@ input {
 }
 
 .node-title {
-  font-size: 12px;
+  font-size: calc(12px * var(--legibility-scale, 1));
   line-height: 1.15;
   font-weight: 800;
   color: #102033;
-  max-width: 126px;
+  max-width: calc(126px * var(--legibility-scale, 1));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -209,7 +209,7 @@ input {
 
 .node-subtitle {
   margin-top: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--legibility-scale, 1));
   line-height: 1.1;
   color: #64748b;
   white-space: nowrap;
@@ -270,7 +270,7 @@ input {
 
 .brand-subtitle {
   color: #64748b;
-  font-size: 12px;
+  font-size: calc(12px * var(--legibility-scale, 1));
   margin-top: 3px;
 }
 
@@ -304,7 +304,7 @@ input {
 .toolbar-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: calc(8px * var(--legibility-scale, 1));
 }
 
 .ghost-button {
@@ -361,7 +361,7 @@ input {
   background: #ffffff;
   padding: 7px 9px;
   display: flex;
-  gap: 8px;
+  gap: calc(8px * var(--legibility-scale, 1));
   align-items: center;
   cursor: pointer;
 }
@@ -422,7 +422,7 @@ input {
 
 .choice-grid {
   display: grid;
-  gap: 8px;
+  gap: calc(8px * var(--legibility-scale, 1));
 }
 
 .choice-card {
@@ -467,7 +467,7 @@ input {
 .budget-box {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: calc(8px * var(--legibility-scale, 1));
   margin-bottom: 11px;
 }
 
@@ -559,7 +559,7 @@ input {
 
 .feature-summary-main b {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: calc(12px * var(--legibility-scale, 1));
   font-weight: 900;
   color: #2563eb;
   background: #eff6ff;
@@ -645,9 +645,9 @@ input {
 .decimal-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8px * var(--legibility-scale, 1));
   color: #64748b;
-  font-size: 12px;
+  font-size: calc(12px * var(--legibility-scale, 1));
   font-weight: 800;
   white-space: nowrap;
 }
