@@ -104,46 +104,44 @@ function coerceMeta(
   payload: Window['PRAXIS_BUILDER_PAYLOAD'],
 ): FeatureMeta & Record<string, unknown> {
   const payloadMeta = (payload?.meta ?? {}) as FeatureMeta & Record<string, unknown>;
-
-  if (window.PRAXIS_ANDOR_META) {
-    return {
-      ...window.PRAXIS_ANDOR_META,
-      gamma:
-        window.PRAXIS_ANDOR_META.gamma ??
-        payload?.gamma ??
-        payloadMeta.gamma,
-    };
-  }
+  const globalMeta = (window.PRAXIS_ANDOR_META ?? {}) as FeatureMeta & Record<string, unknown>;
 
   return {
     ...sampleMeta,
+    ...globalMeta,
     ...payloadMeta,
 
     featureNames:
       payloadMeta.featureNames ??
       payload?.featureNames ??
       payload?.feature_names ??
+      globalMeta.featureNames ??
       sampleMeta.featureNames,
 
     continuousGroups:
       payloadMeta.continuousGroups ??
       payload?.continuousGroups ??
       payload?.continuous_groups ??
+      globalMeta.continuousGroups ??
       sampleMeta.continuousGroups,
 
     thresholds:
       payloadMeta.thresholds ??
       payload?.thresholds ??
+      globalMeta.thresholds ??
       sampleMeta.thresholds,
 
     gamma:
       payloadMeta.gamma ??
-      payload?.gamma,
+      payload?.gamma ??
+      globalMeta.gamma,
 
     lambda_reg:
       payloadMeta.lambda_reg ??
       payload?.lambda_reg ??
-      payload?.lambdaReg,
+      payload?.lambdaReg ??
+      globalMeta.lambda_reg ??
+      globalMeta.lambdaReg,
   } as FeatureMeta & Record<string, unknown>;
 }
 
