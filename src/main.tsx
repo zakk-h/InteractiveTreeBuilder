@@ -10,7 +10,6 @@ import {
   type Node,
   MarkerType,
   useReactFlow,
-  useViewport,
   ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -97,7 +96,6 @@ type NodeData = {
   meta: FeatureMeta & Record<string, unknown>;
   graph: AndOrGraph;
   thresholdDecimals: number;
-  legibilityScale: number;
 };
 
 function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
@@ -247,16 +245,7 @@ function leafMisclassificationRate(
 }
 
 function PraxisNode({ data }: { data: NodeData }) {
-  const {
-    b,
-    active,
-    choices,
-    feasibleChoices,
-    meta,
-    graph,
-    thresholdDecimals,
-    legibilityScale,
-  } = data;
+  const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals } = data;
 
   const icon =
     b.kind === 'split' ? (
@@ -284,7 +273,6 @@ function PraxisNode({ data }: { data: NodeData }) {
   return (
     <div
       className={`praxis-node praxis-node-${b.kind} ${active ? 'active' : ''}`}
-      style={{ '--legibility-scale': legibilityScale } as React.CSSProperties}
     >
       <Handle type="target" position={Position.Top} className="handle" />
 
@@ -847,9 +835,6 @@ function FlowView({
   pushHistory: () => void;
 }) {
   const rf = useReactFlow();
-  const { zoom } = useViewport();
-
-  const legibilityScale = Math.min(1.8, Math.max(1, 1 / Math.max(zoom, 0.55)));
 
   const { nodes: laidNodes, edges: laidEdges } = useMemo(
     () => layoutTree(snapshot.root),
@@ -875,12 +860,11 @@ function FlowView({
             meta,
             graph,
             thresholdDecimals,
-            legibilityScale,
           },
           draggable: false,
         };
       }),
-    [laidNodes, snapshot, graph, meta, thresholdDecimals, legibilityScale],
+    [laidNodes, snapshot, graph, meta, thresholdDecimals],
   );
 
   const edges: Edge[] = useMemo(
@@ -893,17 +877,17 @@ function FlowView({
         type: 'straight',
         animated: false,
         markerEnd: { type: MarkerType.ArrowClosed },
-        labelBgPadding: [12 * legibilityScale, 8 * legibilityScale] as [number, number],
+        labelBgPadding: [12, 8] as [number, number],
         labelBgBorderRadius: 999,
         style: {
           strokeWidth: 2.0,
         },
         labelStyle: {
           fontWeight: 950,
-          fontSize: 18 * legibilityScale,
+          fontSize: 18,
         },
       })),
-    [laidEdges, legibilityScale],
+    [laidEdges],
   );
 
   useEffect(() => {
