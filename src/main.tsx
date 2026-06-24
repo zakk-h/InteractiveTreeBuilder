@@ -116,7 +116,7 @@ const DEFAULT_COLORS: BuilderColors = {
   splitNode: '#ffffff',
   leafNode: '#f0fdf4',
   leafNodesByClass: {
-    '-1': '#000000',
+    '-1': '#D1D5DB',
   },
   edge: '#8da2b8',
   background: '#fbfdff',
