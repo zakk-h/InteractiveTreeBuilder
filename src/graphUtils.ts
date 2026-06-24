@@ -301,6 +301,36 @@ export function autoExpandSingletons(snapshot: HistorySnapshot, graph: AndOrGrap
   }
 }
 
+export function randomComplete(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  rng: () => number = Math.random,
+): HistorySnapshot {
+  let cur = autoExpandSingletons(cloneTree(snapshot), graph);
+
+  while (!isComplete(cur.root)) {
+    const node = unresolvedNodes(cur.root)[0];
+    if (!node) break;
+
+    const feasibleChoices = annotateChoicesFor(graph, cur, node.uid).filter((x) => x.feasible);
+
+    if (feasibleChoices.length === 0) {
+      return cur;
+    }
+
+    const ix = Math.floor(rng() * feasibleChoices.length);
+    const chosen = feasibleChoices[ix].choice;
+
+    if (chosen.kind === 'leaf') {
+      cur = applyLeaf(cur, graph, node.uid, chosen.leaf.id);
+    } else {
+      cur = applySplit(cur, graph, node.uid, chosen.split.id);
+    }
+  }
+
+  return cur;
+}
+
 export function featureLabel(feature: number | undefined, meta: FeatureMeta): string {
   if (feature == null) return '';
   const names = meta.featureNames ?? [];

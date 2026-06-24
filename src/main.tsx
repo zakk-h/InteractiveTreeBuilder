@@ -20,6 +20,7 @@ import {
   Download,
   RotateCcw,
   Search,
+  Shuffle,
   SlidersHorizontal,
   Sparkles,
   Undo2,
@@ -56,7 +57,8 @@ import {
   thresholdLabel,
   treePaths,
   unresolvedNodes,
-  autoExpandSingletons
+  autoExpandSingletons,
+  randomComplete,
 } from './graphUtils';
 
 import { layoutTree } from './layout';
@@ -569,6 +571,7 @@ function SidePanel({
   onApplyLeaf,
   onSetActive,
   onReset,
+  onRandom,
   onUndo,
   canUndo,
 }: {
@@ -582,6 +585,7 @@ function SidePanel({
   onApplyLeaf: (leafId: number) => void;
   onSetActive: (uid: number) => void;
   onReset: () => void;
+  onRandom: () => void;
   onUndo: () => void;
   canUndo: boolean;
 }) {
@@ -747,6 +751,14 @@ function SidePanel({
 
         <button className="ghost-button" onClick={onReset}>
           <RotateCcw size={15} /> Reset
+        </button>
+
+        <button
+          className="ghost-button"
+          onClick={onRandom}
+          disabled={isComplete(snapshot.root)}
+        >
+          <Shuffle size={15} /> Random
         </button>
 
         <button
@@ -1500,6 +1512,9 @@ function App() {
         onReset={() => {
           pushHistory();
           setSnapshot(autoExpandSingletons(makeRoot(graph), graph));
+        }}
+        onRandom={() => {
+          setWithHistory(randomComplete(snapshot, graph));
         }}
         onSetActive={(uid) => setSnapshot({ ...snapshot, activeUid: uid })}
         onApplyLeaf={(leafId) => {
