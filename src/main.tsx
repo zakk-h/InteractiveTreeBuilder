@@ -115,7 +115,9 @@ type NodeData = {
 const DEFAULT_COLORS: BuilderColors = {
   splitNode: '#ffffff',
   leafNode: '#f0fdf4',
-  leafNodesByClass: {},
+  leafNodesByClass: {
+    '-1': '#000000',
+  },
   edge: '#8da2b8',
   background: '#fbfdff',
 };
@@ -129,13 +131,15 @@ function makeDefaultUi(): BuilderUi {
     groupNames: {},
     colors: {
       ...DEFAULT_COLORS,
-      leafNodesByClass: {},
+      leafNodesByClass: {...DEFAULT_COLORS.leafNodesByClass},
     },
   };
 }
 
 function predictionLabel(prediction: number | undefined, ui: BuilderUi): string {
   if (prediction === undefined || prediction === null) return 'predict —';
+
+  if (Number(prediction) === -1) return 'defer';
 
   const custom = ui.labelNames[String(prediction)]?.trim();
   return custom || `predict ${prediction}`;
@@ -325,6 +329,15 @@ function gammaRaw(
   return undefined;
 }
 
+function llroundNonnegative(x: number): number {
+  return Math.floor(x + 0.5);
+}
+
+function etaDeferRaw(meta: FeatureMeta & Record<string, unknown>): number {
+  const eta = Number(meta.eta_defer);
+  return Number.isFinite(eta) ? eta : 0;
+}
+
 function leafMisclassificationRate(
   graph: AndOrGraph,
   meta: FeatureMeta & Record<string, unknown>,
@@ -335,6 +348,7 @@ function leafMisclassificationRate(
   const leaf = graph.leaf_nodes.find((x) => x.id === leafId) as
     | {
         id: number;
+        prediction?: number;
         loss?: number;
         subproblem_size?: number;
       }
@@ -350,8 +364,21 @@ function leafMisclassificationRate(
     return 'err needs γ';
   }
 
-  const mistakes = Math.max(0, Number(leaf.loss) - gamma);
-  const pct = (100 * mistakes) / Number(leaf.subproblem_size);
+  const n = Number(leaf.subproblem_size);
+  const loss = Number(leaf.loss);
+
+  let mistakes: number;
+
+  if (Number(leaf.prediction) === -1) {
+    const eta = etaDeferRaw(meta);
+    mistakes = loss - gamma - llroundNonnegative(eta * n);
+  } else {
+    mistakes = loss - gamma;
+  }
+
+  mistakes = Math.max(0, mistakes);
+
+  const pct = (100 * mistakes) / n;
 
   return `${stripZeros(pct.toFixed(2))}% err`;
 }
@@ -951,11 +978,15 @@ function BuilderSettingsMenu({
   meta,
   ui,
   setUi,
+  thresholdDecimals,
+  setThresholdDecimals,
 }: {
   graph: AndOrGraph;
   meta: FeatureMeta & Record<string, unknown>;
   ui: BuilderUi;
   setUi: Dispatch<SetStateAction<BuilderUi>>;
+  thresholdDecimals: number;
+  setThresholdDecimals: Dispatch<SetStateAction<number>>;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -1043,9 +1074,11 @@ function BuilderSettingsMenu({
     setUi((cur) => ({
       ...cur,
       colors: {
-      ...DEFAULT_COLORS,
-      leafNodesByClass: {},
-    },
+        ...DEFAULT_COLORS,
+        leafNodesByClass: {
+          ...DEFAULT_COLORS.leafNodesByClass,
+        },
+      },
     }));
   };
 
@@ -1066,6 +1099,26 @@ function BuilderSettingsMenu({
             <button className="mini-button" onClick={() => setOpen(false)}>
               Done
             </button>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">Feature display</div>
+
+            <label className="settings-row">
+              <span>Threshold Decimals</span>
+              <input
+                type="range"
+                min={0}
+                max={6}
+                step={1}
+                value={thresholdDecimals}
+                onChange={(e) => setThresholdDecimals(Number(e.target.value))}
+              />
+            </label>
+
+            <div className="settings-empty">
+              Current: {thresholdDecimals}
+            </div>
           </div>
 
           <div className="settings-section">
@@ -1373,23 +1426,13 @@ function App() {
           </div>
 
           <div className="header-actions">
-            <label className="decimal-control">
-              <span>Feature decimals: {thresholdDecimals}</span>
-              <input
-                type="range"
-                min={0}
-                max={6}
-                step={1}
-                value={thresholdDecimals}
-                onChange={(e) => setThresholdDecimals(Number(e.target.value))}
-              />
-            </label>
-
             <BuilderSettingsMenu
               graph={graph}
               meta={meta}
               ui={ui}
               setUi={setUi}
+              thresholdDecimals={thresholdDecimals}
+              setThresholdDecimals={setThresholdDecimals}
             />
 
             <label className="ghost-button upload-button">
