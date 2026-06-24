@@ -59,6 +59,7 @@ import {
   unresolvedNodes,
   autoExpandSingletons,
   randomComplete,
+  optimalComplete,
 } from './graphUtils';
 
 import { layoutTree } from './layout';
@@ -572,6 +573,7 @@ function SidePanel({
   onSetActive,
   onReset,
   onRandom,
+  onOptimal,
   onUndo,
   canUndo,
 }: {
@@ -586,6 +588,7 @@ function SidePanel({
   onSetActive: (uid: number) => void;
   onReset: () => void;
   onRandom: () => void;
+  onOptimal: () => void;
   onUndo: () => void;
   canUndo: boolean;
 }) {
@@ -759,6 +762,14 @@ function SidePanel({
           disabled={isComplete(snapshot.root)}
         >
           <Shuffle size={15} /> Random
+        </button>
+
+        <button
+          className="ghost-button"
+          onClick={onOptimal}
+          disabled={isComplete(snapshot.root)}
+        >
+          <Sparkles size={15} /> Optimal
         </button>
 
         <button
@@ -1515,6 +1526,9 @@ function App() {
         }}
         onRandom={() => {
           setWithHistory(randomComplete(snapshot, graph));
+        }}
+        onOptimal={() => {
+          setWithHistory(optimalComplete(snapshot, graph));
         }}
         onSetActive={(uid) => setSnapshot({ ...snapshot, activeUid: uid })}
         onApplyLeaf={(leafId) => {
