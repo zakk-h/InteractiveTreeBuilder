@@ -1442,7 +1442,7 @@ function App() {
           <div>
             <h1>Interactive Rashomon Tree Builder</h1>
             <p>
-              Choose from splits that perserve near-optimality.
+              Choose from splits that preserve near-optimality.
             </p>
             <p className="payload-name">Loaded: {payloadName}</p>
             {uploadError && <p className="upload-error">{uploadError}</p>}
