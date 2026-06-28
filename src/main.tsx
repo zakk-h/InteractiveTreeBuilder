@@ -1,4 +1,12 @@
-import { type CSSProperties, type Dispatch, type SetStateAction, useEffect, useMemo, useState } from 'react';
+import {
+  type CSSProperties,
+  type Dispatch,
+  type MouseEvent,
+  type SetStateAction,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ReactFlow,
@@ -82,6 +90,9 @@ declare global {
 
       thresholds?: Record<string, unknown>;
 
+      feature_descriptions?: Record<string, string>;
+      featureDescriptions?: Record<string, string>;
+
       gamma?: number;
       lambda_reg?: number;
       lambdaReg?: number;
@@ -101,6 +112,7 @@ type BuilderUi = {
   labelNames: Record<string, string>;
   featureNames: Record<string, string>;
   groupNames: Record<string, string>;
+  featureDescriptions: Record<string, string>;
   colors: BuilderColors;
 };
 
@@ -115,6 +127,16 @@ type NodeData = {
   ui: BuilderUi;
 };
 
+type ChoiceGroupEntry = {
+  name: string;
+  choices: ChoiceBudget[];
+  validCount: number;
+  totalCount: number;
+  bestObjective: number;
+  collapsed: boolean;
+  representativeFeature?: number;
+};
+
 const DEFAULT_COLORS: BuilderColors = {
   splitNode: '#ffffff',
   leafNode: '#f0fdf4',
@@ -126,15 +148,17 @@ const DEFAULT_COLORS: BuilderColors = {
 };
 
 const BINARY_GROUP_LABEL = 'Binary / already-binarized features';
+const DEFAULT_FEATURE_DESCRIPTION = 'A description for this feature can be added here.';
 
 function makeDefaultUi(): BuilderUi {
   return {
     labelNames: {},
     featureNames: {},
     groupNames: {},
+    featureDescriptions: {},
     colors: {
       ...DEFAULT_COLORS,
-      leafNodesByClass: {...DEFAULT_COLORS.leafNodesByClass},
+      leafNodesByClass: { ...DEFAULT_COLORS.leafNodesByClass },
     },
   };
 }
@@ -183,6 +207,45 @@ function displayGroupName(feature: number, meta: FeatureMeta, ui: BuilderUi): st
   return group ? customGroupName(group, ui) : undefined;
 }
 
+function descriptionKeyForFeature(feature: number, meta: FeatureMeta): string {
+  const group = groupName(feature, meta);
+  return group ? `group:${group}` : `feature:${feature}`;
+}
+
+function featureDescription(
+  feature: number | undefined,
+  meta: FeatureMeta & Record<string, unknown>,
+  ui: BuilderUi,
+): string {
+  if (feature === undefined || feature === null) {
+    return DEFAULT_FEATURE_DESCRIPTION;
+  }
+
+  const key = descriptionKeyForFeature(feature, meta);
+  const custom = ui.featureDescriptions[key]?.trim();
+
+  if (custom) {
+    return custom;
+  }
+
+  const descriptions = meta.featureDescriptions as Record<string, string> | undefined;
+  const group = groupName(feature, meta);
+
+  if (group) {
+    return (
+      descriptions?.[`group:${group}`] ??
+      descriptions?.[group] ??
+      DEFAULT_FEATURE_DESCRIPTION
+    );
+  }
+
+  return (
+    descriptions?.[`feature:${feature}`] ??
+    descriptions?.[String(feature)] ??
+    DEFAULT_FEATURE_DESCRIPTION
+  );
+}
+
 function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as HistorySnapshot;
 }
@@ -217,6 +280,14 @@ function coerceMeta(
       payload?.thresholds ??
       globalMeta.thresholds ??
       sampleMeta.thresholds,
+
+    featureDescriptions:
+      payloadMeta.featureDescriptions ??
+      payload?.featureDescriptions ??
+      payload?.feature_descriptions ??
+      globalMeta.featureDescriptions ??
+      sampleMeta.featureDescriptions ??
+      {},
 
     gamma:
       payloadMeta.gamma ??
@@ -286,11 +357,13 @@ function prettySplitLabel(
 }
 
 function fullSplitLabel(
-  feature: number,
+  feature: number | undefined,
   meta: FeatureMeta,
   thresholdDecimals = 3,
   ui: BuilderUi = makeDefaultUi(),
 ): string {
+  if (feature === undefined || feature === null) return '';
+
   const group = groupName(feature, meta);
 
   if (group) {
@@ -396,7 +469,7 @@ function PraxisNode({ data }: { data: NodeData }) {
 
   const title =
     b.kind === 'split'
-      ? prettySplitLabel(b.feature, meta, thresholdDecimals, ui)
+      ? prettySplitLabel(b.feature ?? -1, meta, thresholdDecimals, ui)
       : b.kind === 'leaf'
         ? predictionLabel(b.prediction, ui)
         : `${feasibleChoices}/${choices} choices`;
@@ -407,6 +480,11 @@ function PraxisNode({ data }: { data: NodeData }) {
       : b.kind === 'leaf'
         ? leafMisclassificationRate(graph, meta, b.leafId)
         : `best ${formatObjective(graph, lowerBound(graph, b))}`;
+
+  const description =
+    b.kind === 'split'
+      ? featureDescription(b.feature, meta, ui)
+      : undefined;
 
   const nodeStyle =
     b.kind === 'leaf'
@@ -435,6 +513,12 @@ function PraxisNode({ data }: { data: NodeData }) {
         </div>
         {subtitle && <div className="node-subtitle">{subtitle}</div>}
       </div>
+
+      {b.kind === 'split' && description && (
+        <div className="node-description-popover">
+          {description}
+        </div>
+      )}
 
       {b.kind === 'choice' && <div className="choice-pill">{feasibleChoices}</div>}
 
@@ -504,14 +588,20 @@ function SplitButton({
         excessValue,
       )} objective somewhere else, then this choice can become available again.`;
 
+  const clickCard = (e: MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (feasible) onClick();
+  };
+
   if (choice.kind === 'leaf') {
     return (
-      <button
+      <div
         className={`choice-card leaf-choice ${
           feasible ? '' : 'choice-card-disabled'
         }`}
-        onClick={feasible ? onClick : undefined}
-        disabled={!feasible}
+        onClick={clickCard}
+        role="button"
+        tabIndex={feasible ? 0 : -1}
         title={disabledTitle}
       >
         {!feasible && (
@@ -529,19 +619,20 @@ function SplitButton({
           {formatObjective(graph, objective)} · n={choice.leaf.subproblem_size ?? '—'}
           {!feasible ? ` · over by ${formatObjective(graph, excessValue)}` : ''}
         </div>
-      </button>
+      </div>
     );
   }
 
   const f = choice.split.feature;
 
   return (
-    <button
+    <div
       className={`choice-card split-choice ${
         feasible ? '' : 'choice-card-disabled'
       }`}
-      onClick={feasible ? onClick : undefined}
-      disabled={!feasible}
+      onClick={clickCard}
+      role="button"
+      tabIndex={feasible ? 0 : -1}
       title={disabledTitle}
     >
       {!feasible && (
@@ -550,14 +641,16 @@ function SplitButton({
         </div>
       )}
 
-      <div className="choice-card-main">{prettySplitLabel(f, meta, thresholdDecimals, ui)}</div>
+      <div className="choice-card-main split-choice-main">
+        <span>{prettySplitLabel(f, meta, thresholdDecimals, ui)}</span>
+      </div>
 
       <div className="choice-card-sub">
         obj {formatObjective(graph, objective)} · feature {f} · split #
         {choice.split.id}
         {!feasible ? ` · over by ${formatObjective(graph, excessValue)}` : ''}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -594,10 +687,12 @@ function SidePanel({
 }) {
   const [query, setQuery] = useState('');
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [openDescriptionKey, setOpenDescriptionKey] = useState<string | null>(null);
 
   useEffect(() => {
     setExpandedGroup(null);
     setQuery('');
+    setOpenDescriptionKey(null);
   }, [active?.uid]);
 
   const unresolved = unresolvedNodes(snapshot.root);
@@ -634,10 +729,11 @@ function SidePanel({
 
     return `${prettySplitLabel(c.split.feature, meta, thresholdDecimals, ui)} ${
       displayGroupName(c.split.feature, meta, ui) ?? ''
-    } ${prettyThresholdLabel(c.split.feature, meta, thresholdDecimals)} objective ${formatObjective(
-      graph,
-      x.objective,
-    )}`
+    } ${featureDescription(c.split.feature, meta, ui)} ${prettyThresholdLabel(
+      c.split.feature,
+      meta,
+      thresholdDecimals,
+    )} objective ${formatObjective(graph, x.objective)}`
       .toLowerCase()
       .includes(q);
   });
@@ -669,7 +765,7 @@ function SidePanel({
       }
     }
 
-    const sortedGroupEntries = Array.from(grouped.entries()).map(([name, choices]) => {
+    const sortedGroupEntries: ChoiceGroupEntry[] = Array.from(grouped.entries()).map(([name, choices]) => {
       const sorted = [...choices].sort((a, b) => {
         if (a.choice.kind !== 'split' || b.choice.kind !== 'split') return 0;
 
@@ -681,6 +777,7 @@ function SidePanel({
       });
 
       const bestObjective = Math.min(...sorted.map((x) => x.objective));
+      const representative = sorted.find((x) => x.choice.kind === 'split');
 
       return {
         name,
@@ -689,6 +786,10 @@ function SidePanel({
         totalCount: totalByGroup.get(name) ?? sorted.length,
         bestObjective,
         collapsed: name !== BINARY_GROUP_LABEL && sorted.length > 4,
+        representativeFeature:
+          representative?.choice.kind === 'split'
+            ? representative.choice.split.feature
+            : undefined,
       };
     });
 
@@ -715,6 +816,28 @@ function SidePanel({
         : [];
 
   const paths = treePaths(snapshot.root);
+
+  const continuousDescriptionForEntry = (entry: ChoiceGroupEntry) => {
+    const feature = entry.representativeFeature;
+
+    if (feature === undefined || feature === null) {
+      return undefined;
+    }
+
+    const group = groupName(feature, meta);
+
+    if (!group) {
+      return undefined;
+    }
+
+    const key = descriptionKeyForFeature(feature, meta);
+
+    return {
+      key,
+      open: openDescriptionKey === key,
+      text: featureDescription(feature, meta, ui),
+    };
+  };
 
   return (
     <aside className="panel">
@@ -873,7 +996,7 @@ function SidePanel({
             placeholder={
               expandedEntry
                 ? 'Search thresholds'
-                : 'Search features or thresholds'
+                : 'Search features, thresholds, or descriptions'
             }
           />
         </label>
@@ -921,12 +1044,42 @@ function SidePanel({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                 >
-                  <div className="choice-group-title">
-                    {entry.name}
-                    <span className="choice-group-count">
-                      {entry.totalCount} choices
-                    </span>
-                  </div>
+                  {(() => {
+                    const desc = continuousDescriptionForEntry(entry);
+
+                    return (
+                      <>
+                        <button
+                          className={`choice-group-title choice-group-title-row choice-group-title-button ${
+                            desc?.open ? 'description-open' : ''
+                          }`}
+                          type="button"
+                          onClick={() => {
+                            if (!desc) return;
+                            setOpenDescriptionKey((cur) => (cur === desc.key ? null : desc.key));
+                          }}
+                        >
+                          <span>{entry.name}</span>
+                          <span className="choice-group-count">
+                            {entry.totalCount} choices
+                          </span>
+                        </button>
+
+                        <AnimatePresence initial={false}>
+                          {desc?.open && (
+                            <motion.div
+                              className="choice-group-description"
+                              initial={{ opacity: 0, height: 0, y: -4 }}
+                              animate={{ opacity: 1, height: 'auto', y: 0 }}
+                              exit={{ opacity: 0, height: 0, y: -4 }}
+                            >
+                              {desc.text}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </>
+                    );
+                  })()}
 
                   <button
                     className="feature-summary-card"
@@ -961,27 +1114,57 @@ function SidePanel({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
               >
-                <div className="choice-group-title">
-                  {entry.name}
-                  {expandedEntry && (
-                    <span className="choice-group-count">
-                      {entry.totalCount} choices
-                    </span>
-                  )}
-                </div>
+                {(() => {
+                  const desc = continuousDescriptionForEntry(entry);
+
+                  return (
+                    <>
+                      <button
+                        className={`choice-group-title choice-group-title-row choice-group-title-button ${
+                          desc?.open ? 'description-open' : ''
+                        }`}
+                        type="button"
+                        onClick={() => {
+                          if (!desc) return;
+                          setOpenDescriptionKey((cur) => (cur === desc.key ? null : desc.key));
+                        }}
+                      >
+                        <span>{entry.name}</span>
+                        {expandedEntry && (
+                          <span className="choice-group-count">
+                            {entry.totalCount} choices
+                          </span>
+                        )}
+                      </button>
+
+                      <AnimatePresence initial={false}>
+                        {desc?.open && (
+                          <motion.div
+                            className="choice-group-description"
+                            initial={{ opacity: 0, height: 0, y: -4 }}
+                            animate={{ opacity: 1, height: 'auto', y: 0 }}
+                            exit={{ opacity: 0, height: 0, y: -4 }}
+                          >
+                            {desc.text}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </>
+                  );
+                })()}
 
                 <div className="choice-grid">
                   {entry.choices.map((x) =>
                     x.choice.kind === 'split' ? (
                       <SplitButton
-                        key={`s-${x.choice.split.id}`}
-                        annotated={x}
-                        graph={graph}
-                        meta={meta}
-                        thresholdDecimals={thresholdDecimals}
-                        ui={ui}
-                        onClick={() => onApplySplit(x.choice.split.id)}
-                      />
+                          key={`s-${x.choice.split.id}`}
+                          annotated={x}
+                          graph={graph}
+                          meta={meta}
+                          thresholdDecimals={thresholdDecimals}
+                          ui={ui}
+                                            onClick={() => onApplySplit(x.choice.split.id)}
+                        />
                     ) : null,
                   )}
                 </div>
@@ -990,8 +1173,6 @@ function SidePanel({
           })}
         </AnimatePresence>
       </section>
-
-
     </aside>
   );
 }
@@ -1392,7 +1573,9 @@ function App() {
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
   const [ui, setUi] = useState<BuilderUi>(() => makeDefaultUi());
 
-  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() => autoExpandSingletons(makeRoot(initialGraph), initialGraph));
+  const [snapshot, setSnapshot] = useState<HistorySnapshot>(() =>
+    autoExpandSingletons(makeRoot(initialGraph), initialGraph),
+  );
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
 
   const active = findNode(snapshot.root, snapshot.activeUid);

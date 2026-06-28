@@ -40,6 +40,7 @@ export type FeatureMeta = {
   featureNames?: string[];
   continuousGroups?: Record<string, number[]> | number[][];
   thresholds?: Record<string, number | string> | Array<number | string | null>;
+  featureDescriptions?: Record<string, string>;
 };
 
 export type BuildNodeKind = 'choice' | 'split' | 'leaf';
