@@ -414,50 +414,167 @@ function etaDeferRaw(meta: FeatureMeta & Record<string, unknown>): number {
   return Number.isFinite(eta) ? eta : 0;
 }
 
-function leafMisclassificationRate(
+function leafById(
   graph: AndOrGraph,
-  meta: FeatureMeta & Record<string, unknown>,
   leafId?: number,
-): string {
-  if (leafId === undefined || leafId === null) return 'err —';
+):
+  | {
+      id: number;
+      prediction?: number;
+      loss?: number;
+      objective?: number;
+      subproblem_size?: number;
+      count?: number;
+    }
+  | undefined {
+  if (leafId === undefined || leafId === null) return undefined;
 
-  const leaf = graph.leaf_nodes.find((x) => x.id === leafId) as
+  return graph.leaf_nodes.find((x) => x.id === leafId) as
     | {
         id: number;
         prediction?: number;
         loss?: number;
+        objective?: number;
         subproblem_size?: number;
+        count?: number;
       }
     | undefined;
+}
 
-  if (!leaf || leaf.loss === undefined || !leaf.subproblem_size || leaf.subproblem_size <= 0) {
-    return 'err —';
+function leafSampleSize(graph: AndOrGraph, leafId?: number): number | undefined {
+  const leaf = leafById(graph, leafId);
+  const n = Number(leaf?.subproblem_size ?? leaf?.count);
+
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function leafSampleSizeLabel(graph: AndOrGraph, leafId?: number): string {
+  const n = leafSampleSize(graph, leafId);
+  return n === undefined ? 'n=—' : `n=${n}`;
+}
+
+function leafMistakesRaw(
+  graph: AndOrGraph,
+  meta: FeatureMeta & Record<string, unknown>,
+  leafId?: number,
+): number | undefined {
+  const leaf = leafById(graph, leafId);
+
+  if (!leaf || leaf.loss === undefined) {
+    return undefined;
   }
 
   const gamma = gammaRaw(graph, meta);
 
   if (gamma === undefined) {
-    return 'err needs γ';
+    return undefined;
   }
 
-  const n = Number(leaf.subproblem_size);
+  const n = leafSampleSize(graph, leafId);
   const loss = Number(leaf.loss);
 
-  let mistakes: number;
+  if (n === undefined || n <= 0 || !Number.isFinite(loss)) {
+    return undefined;
+  }
 
   if (Number(leaf.prediction) === -1) {
     const eta = etaDeferRaw(meta);
-    mistakes = loss - gamma - llroundNonnegative(eta * n);
-  } else {
-    mistakes = loss - gamma;
+    return Math.max(0, loss - gamma - llroundNonnegative(eta * n));
   }
 
-  mistakes = Math.max(0, mistakes);
+  return Math.max(0, loss - gamma);
+}
+
+function completedTreeStats(
+  graph: AndOrGraph,
+  meta: FeatureMeta & Record<string, unknown>,
+  root: BuildNode,
+):
+  | {
+      totalN: number;
+      leafN: number;
+      deferredN: number;
+      mistakes: number;
+      accuracy: number;
+      deferralRate: number;
+      hasDeferral: boolean;
+    }
+  | undefined {
+  if (!isComplete(root)) return undefined;
+
+  const totalN = rootSize(graph);
+  let leafN = 0;
+  let deferredN = 0;
+  let mistakes = 0;
+
+  const collect = (node?: BuildNode) => {
+    if (!node) return;
+
+    if (node.kind === 'leaf') {
+      const leaf = leafById(graph, node.leafId);
+      const n = leafSampleSize(graph, node.leafId);
+
+      if (n !== undefined) {
+        leafN += n;
+
+        if (Number(leaf?.prediction) === -1) {
+          deferredN += n;
+        }
+      }
+
+      const leafMistakes = leafMistakesRaw(graph, meta, node.leafId);
+
+      if (leafMistakes !== undefined) {
+        mistakes += leafMistakes;
+      }
+
+      return;
+    }
+
+    collect(node.left);
+    collect(node.right);
+  };
+
+  collect(root);
+
+  if (!Number.isFinite(totalN) || totalN <= 0) {
+    return undefined;
+  }
+
+  return {
+    totalN,
+    leafN,
+    deferredN,
+    mistakes,
+    accuracy: (totalN - mistakes) / totalN,
+    deferralRate: deferredN / totalN,
+    hasDeferral: deferredN > 0,
+  };
+}
+
+function leafMisclassificationRate(
+  graph: AndOrGraph,
+  meta: FeatureMeta & Record<string, unknown>,
+  leafId?: number,
+): string {
+  const n = leafSampleSize(graph, leafId);
+
+  if (n === undefined || n <= 0) {
+    return 'err —';
+  }
+
+  const mistakes = leafMistakesRaw(graph, meta, leafId);
+
+  if (mistakes === undefined) {
+    return gammaRaw(graph, meta) === undefined ? 'err needs γ' : 'err —';
+  }
 
   const pct = (100 * mistakes) / n;
 
   return `${stripZeros(pct.toFixed(2))}% err`;
 }
+
+
 
 function PraxisNode({ data }: { data: NodeData }) {
   const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals, ui } = data;
@@ -478,7 +595,11 @@ function PraxisNode({ data }: { data: NodeData }) {
     b.kind === 'split'
       ? ''
       : b.kind === 'leaf'
-        ? leafMisclassificationRate(graph, meta, b.leafId)
+        ? `${leafSampleSizeLabel(graph, b.leafId)} · ${leafMisclassificationRate(
+            graph,
+            meta,
+            b.leafId,
+          )}`
         : `best ${formatObjective(graph, lowerBound(graph, b))}`;
 
   const description =
@@ -615,8 +736,9 @@ function SplitButton({
         </div>
 
         <div className="choice-card-sub">
+          {leafSampleSizeLabel(graph, choice.leaf.id)} ·{' '}
           {leafMisclassificationRate(graph, meta, choice.leaf.id)} · obj{' '}
-          {formatObjective(graph, objective)} · n={choice.leaf.subproblem_size ?? '—'}
+          {formatObjective(graph, objective)}
           {!feasible ? ` · over by ${formatObjective(graph, excessValue)}` : ''}
         </div>
       </div>
@@ -709,6 +831,7 @@ function SidePanel({
 
   const currentLower = lowerBound(graph, snapshot.root);
   const feasibleTotal = activeChoices.filter((x) => x.feasible).length;
+  const completeStats = completedTreeStats(graph, meta, snapshot.root);
 
   const q = query.trim().toLowerCase();
 
@@ -913,6 +1036,42 @@ function SidePanel({
           <Download size={15} /> Export
         </button>
       </div>
+
+      {completeStats && (
+        <section className="panel-section">
+          <div className="section-title">Completed Tree</div>
+
+          <div className="budget-box">
+            <div>
+              <span>accuracy</span>
+              <b>{stripZeros((100 * completeStats.accuracy).toFixed(2))}%</b>
+            </div>
+
+            <div>
+              <span>mistakes</span>
+              <b>
+                {stripZeros(completeStats.mistakes.toFixed(2))}/{completeStats.totalN}
+              </b>
+            </div>
+
+            {completeStats.hasDeferral && (
+              <div>
+                <span>deferral rate</span>
+                <b>{stripZeros((100 * completeStats.deferralRate).toFixed(2))}%</b>
+              </div>
+            )}
+
+            {completeStats.hasDeferral && (
+              <div>
+                <span>deferred n</span>
+                <b>
+                  {completeStats.deferredN}/{completeStats.totalN}
+                </b>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="panel-section">
         <div className="section-title">Remaining Choices</div>
