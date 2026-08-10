@@ -375,7 +375,7 @@ function samplePanel(message: HTMLElement) {
   const help = document.createElement('div');
   help.className = 'constraint-help';
   help.textContent =
-    'Enter a sample and the class it must receive. Only the unfinished node containing this sample is constrained; every other unfinished node is completed optimally without the prediction constraint.';
+    'Enter any feature values you know and leave the rest blank. Blank means unknown: the completed tree must produce the requested prediction for every full sample consistent with the values you entered. If an unknown feature is used by a split, both branches are constrained.';
   body.appendChild(help);
 
   const features = originalFeatures();
@@ -402,7 +402,7 @@ function samplePanel(message: HTMLElement) {
     const input = document.createElement('input');
     input.type = 'number';
     input.step = 'any';
-    input.placeholder = 'value';
+    input.placeholder = 'blank = unknown';
 
     inputs.set(feature.id, input);
     label.append(name, input);
@@ -437,9 +437,12 @@ function samplePanel(message: HTMLElement) {
     const values = new Map<number, number>();
 
     for (const feature of features) {
-      const value = Number(inputs.get(feature.id)?.value);
+      const raw = inputs.get(feature.id)?.value.trim() ?? '';
+      if (raw === '') continue;
+
+      const value = Number(raw);
       if (!Number.isFinite(value)) {
-        message.textContent = `Enter a numeric value for ${feature.name}.`;
+        message.textContent = `Enter a numeric value for ${feature.name}, or leave it blank.`;
         message.style.display = 'block';
         return;
       }
@@ -555,7 +558,9 @@ function syncButton() {
   installButton();
   const button = document.getElementById(BUTTON_ID) as HTMLButtonElement | null;
   const optimal = findOptimalButton();
-  if (button && optimal) button.disabled = optimal.disabled;
+  if (button && optimal && button.disabled !== optimal.disabled) {
+    button.disabled = optimal.disabled;
+  }
 }
 
 injectStyles();

@@ -362,7 +362,13 @@ export function randomComplete(
   return cur;
 }
 
-function bestUnconstrainedPlan(graph: AndOrGraph, trieId: number): CompletionPlan | undefined {
+function bestUnconstrainedPlan(
+  graph: AndOrGraph,
+  trieId: number,
+  memo?: Map<number, CompletionPlan | undefined>,
+): CompletionPlan | undefined {
+  if (memo?.has(trieId)) return memo.get(trieId);
+
   const idx = buildIndex(graph);
   const trie = idx.trie.get(trieId);
   if (!trie) return undefined;
@@ -384,8 +390,8 @@ function bestUnconstrainedPlan(graph: AndOrGraph, trieId: number): CompletionPla
     const split = idx.splits.get(splitId);
     if (!split) continue;
 
-    const left = bestUnconstrainedPlan(graph, split.left_trie_id);
-    const right = bestUnconstrainedPlan(graph, split.right_trie_id);
+    const left = bestUnconstrainedPlan(graph, split.left_trie_id, memo);
+    const right = bestUnconstrainedPlan(graph, split.right_trie_id, memo);
     if (!left || !right) continue;
 
     const candidate: CompletionPlan = {
@@ -399,6 +405,7 @@ function bestUnconstrainedPlan(graph: AndOrGraph, trieId: number): CompletionPla
     if (!best || candidate.objective < best.objective) best = candidate;
   }
 
+  memo?.set(trieId, best);
   return best;
 }
 
@@ -451,7 +458,11 @@ function bestPredictingPlan(
   trieId: number,
   featureTruth: Record<string, boolean>,
   targetPrediction: number,
+  constrainedMemo: Map<number, CompletionPlan | undefined>,
+  freeMemo: Map<number, CompletionPlan | undefined>,
 ): CompletionPlan | undefined {
+  if (constrainedMemo.has(trieId)) return constrainedMemo.get(trieId);
+
   const idx = buildIndex(graph);
   const trie = idx.trie.get(trieId);
   if (!trie) return undefined;
@@ -475,31 +486,58 @@ function bestPredictingPlan(
     if (!split) continue;
 
     const branch = featureTruth[String(split.feature)];
-    if (typeof branch !== 'boolean') continue;
+    let left: CompletionPlan | undefined;
+    let right: CompletionPlan | undefined;
 
-    const constrainedTrieId = branch ? split.left_trie_id : split.right_trie_id;
-    const freeTrieId = branch ? split.right_trie_id : split.left_trie_id;
+    if (typeof branch === 'boolean') {
+      const constrainedTrieId = branch ? split.left_trie_id : split.right_trie_id;
+      const freeTrieId = branch ? split.right_trie_id : split.left_trie_id;
 
-    const constrained = bestPredictingPlan(
-      graph,
-      constrainedTrieId,
-      featureTruth,
-      targetPrediction,
-    );
-    const free = bestUnconstrainedPlan(graph, freeTrieId);
-    if (!constrained || !free) continue;
+      const constrained = bestPredictingPlan(
+        graph,
+        constrainedTrieId,
+        featureTruth,
+        targetPrediction,
+        constrainedMemo,
+        freeMemo,
+      );
+      const free = bestUnconstrainedPlan(graph, freeTrieId, freeMemo);
+      if (!constrained || !free) continue;
+
+      left = branch ? constrained : free;
+      right = branch ? free : constrained;
+    } else {
+      left = bestPredictingPlan(
+        graph,
+        split.left_trie_id,
+        featureTruth,
+        targetPrediction,
+        constrainedMemo,
+        freeMemo,
+      );
+      right = bestPredictingPlan(
+        graph,
+        split.right_trie_id,
+        featureTruth,
+        targetPrediction,
+        constrainedMemo,
+        freeMemo,
+      );
+      if (!left || !right) continue;
+    }
 
     const candidate: CompletionPlan = {
       kind: 'split',
       splitId,
-      objective: constrained.objective + free.objective,
-      left: branch ? constrained : free,
-      right: branch ? free : constrained,
+      objective: left.objective + right.objective,
+      left,
+      right,
     };
 
     if (!best || candidate.objective < best.objective) best = candidate;
   }
 
+  constrainedMemo.set(trieId, best);
   return best;
 }
 
@@ -620,19 +658,43 @@ function constrainedAvoidComplete(
   return next;
 }
 
-function routeSampleToFrontier(
+type PartialRouteResult = {
+  frontier: BuildNode[];
+  leaves: BuildNode[];
+  error?: string;
+};
+
+function routePartialSample(
   node: BuildNode,
   featureTruth: Record<string, boolean>,
-): { kind: 'choice'; node: BuildNode } | { kind: 'leaf'; node: BuildNode } | { kind: 'error' } {
-  if (node.kind === 'choice') return { kind: 'choice', node };
-  if (node.kind === 'leaf') return { kind: 'leaf', node };
+  out: PartialRouteResult,
+): void {
+  if (out.error) return;
+
+  if (node.kind === 'choice') {
+    out.frontier.push(node);
+    return;
+  }
+
+  if (node.kind === 'leaf') {
+    out.leaves.push(node);
+    return;
+  }
+
+  if (!node.left || !node.right) {
+    out.error = 'The partial tree has a missing child.';
+    return;
+  }
 
   const branch = featureTruth[String(node.feature)];
-  if (typeof branch !== 'boolean') return { kind: 'error' };
 
-  const child = branch ? node.left : node.right;
-  if (!child) return { kind: 'error' };
-  return routeSampleToFrontier(child, featureTruth);
+  if (typeof branch === 'boolean') {
+    routePartialSample(branch ? node.left : node.right, featureTruth, out);
+    return;
+  }
+
+  routePartialSample(node.left, featureTruth, out);
+  routePartialSample(node.right, featureTruth, out);
 }
 
 function constrainedSampleComplete(
@@ -641,36 +703,52 @@ function constrainedSampleComplete(
   featureTruth: Record<string, boolean>,
   targetPrediction: number,
 ): HistorySnapshot {
-  const route = routeSampleToFrontier(snapshot.root, featureTruth);
+  const route: PartialRouteResult = { frontier: [], leaves: [] };
+  routePartialSample(snapshot.root, featureTruth, route);
 
-  if (route.kind === 'error') {
-    setConstraintResult(false, 'Could not route the sample through the existing partial tree.');
+  if (route.error) {
+    setConstraintResult(false, route.error);
     return snapshot;
   }
 
-  if (route.kind === 'leaf') {
+  const conflictingLeaf = route.leaves.find(
+    (leaf) => Number(leaf.prediction) !== targetPrediction,
+  );
+
+  if (conflictingLeaf) {
     setConstraintResult(
       false,
-      `This sample already reaches a leaf in the existing tree (prediction ${String(
-        route.node.prediction,
-      )}). Rewind that branch before constraining its prediction.`,
+      `Some full samples consistent with the entered values already reach an existing leaf with prediction ${String(
+        conflictingLeaf.prediction,
+      )}. Rewind that branch before requiring class ${String(targetPrediction)}.`,
     );
     return snapshot;
   }
 
+  const constrainedFrontier = new Set(route.frontier.map((node) => node.uid));
   const plans = new Map<number, CompletionPlan>();
+  const constrainedMemo = new Map<number, CompletionPlan | undefined>();
+  const freeMemo = new Map<number, CompletionPlan | undefined>();
 
   for (const node of unresolvedNodes(snapshot.root)) {
-    const plan =
-      node.uid === route.node.uid
-        ? bestPredictingPlan(graph, node.graphTrieId, featureTruth, targetPrediction)
-        : bestUnconstrainedPlan(graph, node.graphTrieId);
+    const plan = constrainedFrontier.has(node.uid)
+      ? bestPredictingPlan(
+          graph,
+          node.graphTrieId,
+          featureTruth,
+          targetPrediction,
+          constrainedMemo,
+          freeMemo,
+        )
+      : bestUnconstrainedPlan(graph, node.graphTrieId, freeMemo);
 
     if (!plan) {
       setConstraintResult(
         false,
-        node.uid === route.node.uid
-          ? `No completion can make this sample predict class ${String(targetPrediction)}.`
+        constrainedFrontier.has(node.uid)
+          ? `No completion can guarantee class ${String(
+              targetPrediction,
+            )} for every sample consistent with the entered values.`
           : 'Could not optimally complete one of the remaining nodes.',
       );
       return snapshot;
@@ -688,16 +766,18 @@ function constrainedSampleComplete(
   if (lowerBound(graph, next.root) > rootBudget(graph) + 1e-9) {
     setConstraintResult(
       false,
-      `No completion that predicts class ${String(
+      `No completion that guarantees class ${String(
         targetPrediction,
-      )} for this sample fits within the Rashomon budget.`,
+      )} for every sample consistent with the entered values fits within the Rashomon budget.`,
     );
     return snapshot;
   }
 
   setConstraintResult(
     true,
-    `Built the optimal completion that predicts class ${String(targetPrediction)} for this sample.`,
+    `Built the optimal completion guaranteeing class ${String(
+      targetPrediction,
+    )} for every sample consistent with the entered values.`,
   );
   return next;
 }
