@@ -1519,10 +1519,10 @@ function BuilderSettingsMenu({
           </div>
 
           <div className="settings-section">
-            <div className="settings-section-title">Independent binary feature names</div>
+            <div className="settings-section-title">Binary feature names</div>
 
             {binaryFeatures.length === 0 && (
-              <div className="settings-empty">No independent binary features in this payload.</div>
+              <div className="settings-empty">No binary features to show.</div>
             )}
 
             {binaryFeatures.map((feature) => (
