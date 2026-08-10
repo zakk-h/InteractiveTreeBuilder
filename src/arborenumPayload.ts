@@ -132,11 +132,23 @@ function isArborEnumPayload(value: unknown): value is ArborEnumBuilderPayload {
   return Array.isArray((obj.meta as Record<string, unknown>).featureRegistry);
 }
 
+function rememberCurrentPayload(payload: unknown) {
+  const internalWindow = window as Window & Record<string, unknown>;
+  internalWindow.ARBORENUM_CURRENT_BUILDER_PAYLOAD = payload;
+}
+
 // Normalize ArborEnum JSON uploads before main.tsx consumes them.
 const nativeJsonParse = JSON.parse.bind(JSON);
 JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unknown) => unknown) => {
   const parsed = nativeJsonParse(text, reviver as never);
-  return isArborEnumPayload(parsed) ? normalizeArborEnumPayload(parsed) : parsed;
+
+  if (!isArborEnumPayload(parsed)) {
+    return parsed;
+  }
+
+  const normalized = normalizeArborEnumPayload(parsed);
+  rememberCurrentPayload(normalized);
+  return normalized;
 }) as typeof JSON.parse;
 
 // Normalize the payload embedded by ArborEnum.save_builder_html().
@@ -144,6 +156,7 @@ const embeddedPayload = window.ARBORENUM_BUILDER_PAYLOAD;
 if (embeddedPayload) {
   const normalized = normalizeArborEnumPayload(embeddedPayload);
   const internalWindow = window as Window & Record<string, unknown>;
+  rememberCurrentPayload(normalized);
   internalWindow.PRAXIS_BUILDER_PAYLOAD = normalized;
   internalWindow.PRAXIS_ANDOR_GRAPH = normalized.graph;
   internalWindow.PRAXIS_ANDOR_META = normalized.meta;

@@ -6,6 +6,37 @@ type GraphIndex = {
   leaves: Map<number, AndOrGraph['leaf_nodes'][number]>;
 };
 
+type CompletionPlan =
+  | { kind: 'leaf'; leafId: number; objective: number }
+  | {
+      kind: 'split';
+      splitId: number;
+      objective: number;
+      left: CompletionPlan;
+      right: CompletionPlan;
+    };
+
+type ConstrainedCompletionSpec =
+  | {
+      mode: 'avoid';
+      forbiddenInternalFeatures: number[];
+    }
+  | {
+      mode: 'sample';
+      featureTruth: Record<string, boolean>;
+      targetPrediction: number;
+    };
+
+declare global {
+  interface Window {
+    ARBORENUM_CONSTRAINED_COMPLETION?: ConstrainedCompletionSpec;
+    ARBORENUM_CONSTRAINED_COMPLETION_RESULT?: {
+      ok: boolean;
+      message: string;
+    };
+  }
+}
+
 const indexCache = new WeakMap<AndOrGraph, GraphIndex>();
 
 function buildIndexUncached(graph: AndOrGraph): GraphIndex {
@@ -331,11 +362,365 @@ export function randomComplete(
   return cur;
 }
 
+function bestUnconstrainedPlan(graph: AndOrGraph, trieId: number): CompletionPlan | undefined {
+  const idx = buildIndex(graph);
+  const trie = idx.trie.get(trieId);
+  if (!trie) return undefined;
+
+  let best: CompletionPlan | undefined;
+
+  for (const leafId of trie.leaf_ids) {
+    const leaf = idx.leaves.get(leafId);
+    if (!leaf) continue;
+    const candidate: CompletionPlan = {
+      kind: 'leaf',
+      leafId,
+      objective: leafObjective(leaf),
+    };
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  for (const splitId of trie.split_ids) {
+    const split = idx.splits.get(splitId);
+    if (!split) continue;
+
+    const left = bestUnconstrainedPlan(graph, split.left_trie_id);
+    const right = bestUnconstrainedPlan(graph, split.right_trie_id);
+    if (!left || !right) continue;
+
+    const candidate: CompletionPlan = {
+      kind: 'split',
+      splitId,
+      objective: left.objective + right.objective,
+      left,
+      right,
+    };
+
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  return best;
+}
+
+function bestAvoidingPlan(
+  graph: AndOrGraph,
+  trieId: number,
+  forbidden: Set<number>,
+): CompletionPlan | undefined {
+  const idx = buildIndex(graph);
+  const trie = idx.trie.get(trieId);
+  if (!trie) return undefined;
+
+  let best: CompletionPlan | undefined;
+
+  for (const leafId of trie.leaf_ids) {
+    const leaf = idx.leaves.get(leafId);
+    if (!leaf) continue;
+    const candidate: CompletionPlan = {
+      kind: 'leaf',
+      leafId,
+      objective: leafObjective(leaf),
+    };
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  for (const splitId of trie.split_ids) {
+    const split = idx.splits.get(splitId);
+    if (!split || forbidden.has(split.feature)) continue;
+
+    const left = bestAvoidingPlan(graph, split.left_trie_id, forbidden);
+    const right = bestAvoidingPlan(graph, split.right_trie_id, forbidden);
+    if (!left || !right) continue;
+
+    const candidate: CompletionPlan = {
+      kind: 'split',
+      splitId,
+      objective: left.objective + right.objective,
+      left,
+      right,
+    };
+
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  return best;
+}
+
+function bestPredictingPlan(
+  graph: AndOrGraph,
+  trieId: number,
+  featureTruth: Record<string, boolean>,
+  targetPrediction: number,
+): CompletionPlan | undefined {
+  const idx = buildIndex(graph);
+  const trie = idx.trie.get(trieId);
+  if (!trie) return undefined;
+
+  let best: CompletionPlan | undefined;
+
+  for (const leafId of trie.leaf_ids) {
+    const leaf = idx.leaves.get(leafId);
+    if (!leaf || Number(leaf.prediction) !== targetPrediction) continue;
+
+    const candidate: CompletionPlan = {
+      kind: 'leaf',
+      leafId,
+      objective: leafObjective(leaf),
+    };
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  for (const splitId of trie.split_ids) {
+    const split = idx.splits.get(splitId);
+    if (!split) continue;
+
+    const branch = featureTruth[String(split.feature)];
+    if (typeof branch !== 'boolean') continue;
+
+    const constrainedTrieId = branch ? split.left_trie_id : split.right_trie_id;
+    const freeTrieId = branch ? split.right_trie_id : split.left_trie_id;
+
+    const constrained = bestPredictingPlan(
+      graph,
+      constrainedTrieId,
+      featureTruth,
+      targetPrediction,
+    );
+    const free = bestUnconstrainedPlan(graph, freeTrieId);
+    if (!constrained || !free) continue;
+
+    const candidate: CompletionPlan = {
+      kind: 'split',
+      splitId,
+      objective: constrained.objective + free.objective,
+      left: branch ? constrained : free,
+      right: branch ? free : constrained,
+    };
+
+    if (!best || candidate.objective < best.objective) best = candidate;
+  }
+
+  return best;
+}
+
+function buildFromPlan(
+  graph: AndOrGraph,
+  uid: number,
+  graphTrieId: number,
+  plan: CompletionPlan,
+  nextUid: { value: number },
+): BuildNode | undefined {
+  const idx = buildIndex(graph);
+
+  if (plan.kind === 'leaf') {
+    const leaf = idx.leaves.get(plan.leafId);
+    if (!leaf) return undefined;
+
+    return {
+      uid,
+      graphTrieId,
+      kind: 'leaf',
+      prediction: leaf.prediction,
+      leafId: leaf.id,
+    };
+  }
+
+  const split = idx.splits.get(plan.splitId);
+  if (!split) return undefined;
+
+  const leftUid = nextUid.value++;
+  const rightUid = nextUid.value++;
+
+  const left = buildFromPlan(graph, leftUid, split.left_trie_id, plan.left, nextUid);
+  const right = buildFromPlan(graph, rightUid, split.right_trie_id, plan.right, nextUid);
+  if (!left || !right) return undefined;
+
+  return {
+    uid,
+    graphTrieId,
+    kind: 'split',
+    feature: split.feature,
+    splitId: split.id,
+    left,
+    right,
+  };
+}
+
+function fillFrontierFromPlans(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  plans: Map<number, CompletionPlan>,
+): HistorySnapshot | undefined {
+  const next = cloneTree(snapshot);
+  const nextUid = { value: next.nextUid };
+
+  for (const [uid, plan] of plans.entries()) {
+    const node = findNode(next.root, uid);
+    if (!node || node.kind !== 'choice') return undefined;
+
+    const built = buildFromPlan(graph, node.uid, node.graphTrieId, plan, nextUid);
+    if (!built) return undefined;
+    Object.assign(node, built);
+  }
+
+  next.nextUid = nextUid.value;
+  next.activeUid = next.root.uid;
+  return next;
+}
+
+function setConstraintResult(ok: boolean, message: string) {
+  window.ARBORENUM_CONSTRAINED_COMPLETION_RESULT = { ok, message };
+}
+
+function constrainedAvoidComplete(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  forbiddenFeatures: number[],
+): HistorySnapshot {
+  const forbidden = new Set(forbiddenFeatures.map(Number));
+
+  const alreadyUsed = walk(snapshot.root).find(
+    (node) => node.kind === 'split' && node.feature !== undefined && forbidden.has(node.feature),
+  );
+
+  if (alreadyUsed) {
+    setConstraintResult(
+      false,
+      'A selected feature is already used in the partial tree. Rewind that split first if the final tree must avoid it.',
+    );
+    return snapshot;
+  }
+
+  const plans = new Map<number, CompletionPlan>();
+
+  for (const node of unresolvedNodes(snapshot.root)) {
+    const plan = bestAvoidingPlan(graph, node.graphTrieId, forbidden);
+    if (!plan) {
+      setConstraintResult(false, 'No completion exists that avoids the selected features.');
+      return snapshot;
+    }
+    plans.set(node.uid, plan);
+  }
+
+  const next = fillFrontierFromPlans(snapshot, graph, plans);
+  if (!next) {
+    setConstraintResult(false, 'Could not construct the constrained completion.');
+    return snapshot;
+  }
+
+  if (lowerBound(graph, next.root) > rootBudget(graph) + 1e-9) {
+    setConstraintResult(
+      false,
+      'No completion that avoids the selected features fits within the Rashomon budget.',
+    );
+    return snapshot;
+  }
+
+  setConstraintResult(true, 'Built the optimal completion that avoids the selected features.');
+  return next;
+}
+
+function routeSampleToFrontier(
+  node: BuildNode,
+  featureTruth: Record<string, boolean>,
+): { kind: 'choice'; node: BuildNode } | { kind: 'leaf'; node: BuildNode } | { kind: 'error' } {
+  if (node.kind === 'choice') return { kind: 'choice', node };
+  if (node.kind === 'leaf') return { kind: 'leaf', node };
+
+  const branch = featureTruth[String(node.feature)];
+  if (typeof branch !== 'boolean') return { kind: 'error' };
+
+  const child = branch ? node.left : node.right;
+  if (!child) return { kind: 'error' };
+  return routeSampleToFrontier(child, featureTruth);
+}
+
+function constrainedSampleComplete(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  featureTruth: Record<string, boolean>,
+  targetPrediction: number,
+): HistorySnapshot {
+  const route = routeSampleToFrontier(snapshot.root, featureTruth);
+
+  if (route.kind === 'error') {
+    setConstraintResult(false, 'Could not route the sample through the existing partial tree.');
+    return snapshot;
+  }
+
+  if (route.kind === 'leaf') {
+    setConstraintResult(
+      false,
+      `This sample already reaches a leaf in the existing tree (prediction ${String(
+        route.node.prediction,
+      )}). Rewind that branch before constraining its prediction.`,
+    );
+    return snapshot;
+  }
+
+  const plans = new Map<number, CompletionPlan>();
+
+  for (const node of unresolvedNodes(snapshot.root)) {
+    const plan =
+      node.uid === route.node.uid
+        ? bestPredictingPlan(graph, node.graphTrieId, featureTruth, targetPrediction)
+        : bestUnconstrainedPlan(graph, node.graphTrieId);
+
+    if (!plan) {
+      setConstraintResult(
+        false,
+        node.uid === route.node.uid
+          ? `No completion can make this sample predict class ${String(targetPrediction)}.`
+          : 'Could not optimally complete one of the remaining nodes.',
+      );
+      return snapshot;
+    }
+
+    plans.set(node.uid, plan);
+  }
+
+  const next = fillFrontierFromPlans(snapshot, graph, plans);
+  if (!next) {
+    setConstraintResult(false, 'Could not construct the constrained completion.');
+    return snapshot;
+  }
+
+  if (lowerBound(graph, next.root) > rootBudget(graph) + 1e-9) {
+    setConstraintResult(
+      false,
+      `No completion that predicts class ${String(
+        targetPrediction,
+      )} for this sample fits within the Rashomon budget.`,
+    );
+    return snapshot;
+  }
+
+  setConstraintResult(
+    true,
+    `Built the optimal completion that predicts class ${String(targetPrediction)} for this sample.`,
+  );
+  return next;
+}
 
 export function optimalComplete(
   snapshot: HistorySnapshot,
   graph: AndOrGraph,
 ): HistorySnapshot {
+  const constraint = window.ARBORENUM_CONSTRAINED_COMPLETION;
+
+  if (constraint?.mode === 'avoid') {
+    return constrainedAvoidComplete(snapshot, graph, constraint.forbiddenInternalFeatures);
+  }
+
+  if (constraint?.mode === 'sample') {
+    return constrainedSampleComplete(
+      snapshot,
+      graph,
+      constraint.featureTruth,
+      Number(constraint.targetPrediction),
+    );
+  }
+
   let cur = autoExpandSingletons(cloneTree(snapshot), graph);
 
   while (!isComplete(cur.root)) {
