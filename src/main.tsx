@@ -147,7 +147,7 @@ const DEFAULT_COLORS: BuilderColors = {
   background: '#fbfdff',
 };
 
-const BINARY_GROUP_LABEL = 'Binary / already-binarized features';
+const BINARY_GROUP_LABEL = 'Binary features';
 const DEFAULT_FEATURE_DESCRIPTION = 'A description for this feature can be added here.';
 
 function makeDefaultUi(): BuilderUi {
