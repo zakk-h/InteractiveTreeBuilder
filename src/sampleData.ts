@@ -49,3 +49,13 @@ export const sampleMeta: FeatureMeta & Record<string, unknown> = {
   thresholds,
   continuousGroups,
 };
+
+// Keep the built-in sample visible to helper UI modules in exactly the same
+// place uploaded ArborEnum payloads are exposed by arborenumPayload.ts.
+const internalWindow = window as Window & Record<string, unknown>;
+if (!internalWindow.ARBORENUM_CURRENT_BUILDER_PAYLOAD) {
+  internalWindow.ARBORENUM_CURRENT_BUILDER_PAYLOAD = {
+    graph: sampleGraph,
+    meta: sampleMeta,
+  };
+}
