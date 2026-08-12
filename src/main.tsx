@@ -64,6 +64,7 @@ import {
   rootSize,
   thresholdLabel,
   treePaths,
+  trieMinObjective,
   unresolvedNodes,
   autoExpandSingletons,
   randomComplete,
@@ -75,10 +76,10 @@ import './style.css';
 
 declare global {
   interface Window {
-    PRAXIS_ANDOR_GRAPH?: AndOrGraph;
-    PRAXIS_ANDOR_META?: FeatureMeta & Record<string, unknown>;
+    ARBORENUM_ANDOR_GRAPH?: AndOrGraph;
+    ARBORENUM_ANDOR_META?: FeatureMeta & Record<string, unknown>;
 
-    PRAXIS_BUILDER_PAYLOAD?: {
+    ARBORENUM_BUILDER_PAYLOAD?: {
       graph?: AndOrGraph;
       meta?: FeatureMeta & Record<string, unknown>;
 
@@ -251,10 +252,10 @@ function cloneSnapshot(snapshot: HistorySnapshot): HistorySnapshot {
 }
 
 function coerceMeta(
-  payload: Window['PRAXIS_BUILDER_PAYLOAD'],
+  payload: Window['ARBORENUM_BUILDER_PAYLOAD'],
 ): FeatureMeta & Record<string, unknown> {
   const payloadMeta = (payload?.meta ?? {}) as FeatureMeta & Record<string, unknown>;
-  const globalMeta = (window.PRAXIS_ANDOR_META ?? {}) as FeatureMeta & Record<string, unknown>;
+  const globalMeta = (window.ARBORENUM_ANDOR_META ?? {}) as FeatureMeta & Record<string, unknown>;
 
   return {
     ...sampleMeta,
@@ -577,9 +578,7 @@ function leafMisclassificationRate(
   return `${stripZeros(pct.toFixed(2))}% err`;
 }
 
-
-
-function PraxisNode({ data }: { data: NodeData }) {
+function ArborEnumNode({ data }: { data: NodeData }) {
   const { b, active, choices, feasibleChoices, meta, graph, thresholdDecimals, ui } = data;
 
   const icon =
@@ -621,7 +620,7 @@ function PraxisNode({ data }: { data: NodeData }) {
 
   return (
     <div
-      className={`praxis-node praxis-node-${b.kind} ${active ? 'active' : ''}`}
+      className={`arborenum-node arborenum-node-${b.kind} ${active ? 'active' : ''}`}
       style={nodeStyle}
     >
       <Handle type="target" position={Position.Top} className="handle" />
@@ -652,7 +651,7 @@ function PraxisNode({ data }: { data: NodeData }) {
 }
 
 const nodeTypes = {
-  praxis: PraxisNode,
+  arborenum: ArborEnumNode,
 };
 
 function downloadJson(name: string, x: unknown) {
@@ -833,6 +832,15 @@ function SidePanel({
       : undefined;
 
   const currentLower = lowerBound(graph, snapshot.root);
+  const rootLimit = rootBudget(graph);
+  const rootMinimum = trieMinObjective(graph, graph.root_trie_id);
+  const initialSlack = Math.max(0, rootLimit - rootMinimum);
+  const remainingSlack = Math.max(0, rootLimit - currentLower);
+  const slackFraction =
+    Number.isFinite(initialSlack) && initialSlack > 1e-9
+      ? Math.max(0, Math.min(1, remainingSlack / initialSlack))
+      : 0;
+  const slackPercent = Math.round(100 * slackFraction);
   const feasibleTotal = activeChoices.filter((x) => x.feasible).length;
   const completeStats = completedTreeStats(graph, meta, snapshot.root);
 
@@ -983,16 +991,40 @@ function SidePanel({
           <span>current lower bound</span>
         </div>
         <div className="metric">
-          <b>{formatObjective(graph, rootBudget(graph))}</b>
+          <b>{formatObjective(graph, rootLimit)}</b>
           <span>Rashomon budget</span>
         </div>
         <div className="metric">
-          <b>{formatObjective(graph, rootBudget(graph) - currentLower)}</b>
+          <b>{formatObjective(graph, remainingSlack)}</b>
           <span>remaining slack</span>
         </div>
         <div className="metric">
           <b>{rootSize(graph).toLocaleString()}</b>
           <span>training samples</span>
+        </div>
+      </div>
+
+      <div className="rashomon-slack-card">
+        <div className="rashomon-slack-head">
+          <span>Rashomon slack remaining</span>
+          <b>{slackPercent}%</b>
+        </div>
+        <div
+          className="rashomon-slack-track"
+          role="progressbar"
+          aria-label="Rashomon slack remaining"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={slackPercent}
+        >
+          <div
+            className="rashomon-slack-fill"
+            style={{ width: `${slackPercent}%` }}
+          />
+        </div>
+        <div className="rashomon-slack-foot">
+          <span>{formatObjective(graph, remainingSlack)} remaining</span>
+          <span>{formatObjective(graph, initialSlack)} originally</span>
         </div>
       </div>
 
@@ -1024,7 +1056,7 @@ function SidePanel({
         <button
           className="ghost-button"
           onClick={() =>
-            downloadJson('praxis-built-tree.json', {
+            downloadJson('arborenum-built-tree.json', {
               complete: isComplete(snapshot.root),
               objective_lower_bound: currentLower,
               normalized_objective_lower_bound: normalizedObjective(
@@ -1319,14 +1351,14 @@ function SidePanel({
                   {entry.choices.map((x) =>
                     x.choice.kind === 'split' ? (
                       <SplitButton
-                          key={`s-${x.choice.split.id}`}
-                          annotated={x}
-                          graph={graph}
-                          meta={meta}
-                          thresholdDecimals={thresholdDecimals}
-                          ui={ui}
-                                            onClick={() => onApplySplit(x.choice.split.id)}
-                        />
+                        key={`s-${x.choice.split.id}`}
+                        annotated={x}
+                        graph={graph}
+                        meta={meta}
+                        thresholdDecimals={thresholdDecimals}
+                        ui={ui}
+                        onClick={() => onApplySplit(x.choice.split.id)}
+                      />
                     ) : null,
                   )}
                 </div>
@@ -1641,7 +1673,7 @@ function FlowView({
 
         return {
           id: String(n.uid),
-          type: 'praxis',
+          type: 'arborenum',
           position: { x: n.x, y: n.y },
           data: {
             b: n,
@@ -1719,10 +1751,10 @@ function FlowView({
 }
 
 function App() {
-  const initialPayload = window.PRAXIS_BUILDER_PAYLOAD;
+  const initialPayload = window.ARBORENUM_BUILDER_PAYLOAD;
 
   const initialGraph =
-    window.PRAXIS_ANDOR_GRAPH ??
+    window.ARBORENUM_ANDOR_GRAPH ??
     initialPayload?.graph ??
     sampleGraph;
 
@@ -1730,7 +1762,7 @@ function App() {
 
   const [graph, setGraph] = useState<AndOrGraph>(initialGraph);
   const [meta, setMeta] = useState<FeatureMeta & Record<string, unknown>>(initialMeta);
-  const [payloadName, setPayloadName] = useState<string>('embedded PRAXIS graph');
+  const [payloadName, setPayloadName] = useState<string>('embedded ArborEnum graph');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
   const [ui, setUi] = useState<BuilderUi>(() => makeDefaultUi());
@@ -1743,7 +1775,7 @@ function App() {
   const active = findNode(snapshot.root, snapshot.activeUid);
 
   const loadPayload = (raw: unknown, name: string) => {
-    const payload = raw as Window['PRAXIS_BUILDER_PAYLOAD'];
+    const payload = raw as Window['ARBORENUM_BUILDER_PAYLOAD'];
 
     const nextGraph = payload?.graph;
 
