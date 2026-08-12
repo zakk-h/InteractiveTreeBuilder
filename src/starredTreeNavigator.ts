@@ -1,11 +1,13 @@
 const STYLE_ID = 'arborenum-starred-trees-style';
-const WRAP_ID = 'arborenum-starred-trees-wrap';
+const HEADER_ROW_ID = 'arborenum-header-tree-actions';
+const COMPLETION_LABEL_ID = 'arborenum-completion-label';
 const OVERLAY_ID = 'arborenum-starred-trees-overlay';
 
 type BuildNodeLike = {
   uid: number;
   graphTrieId: number;
   kind: 'choice' | 'split' | 'leaf';
+  feature?: number;
   left?: BuildNodeLike;
   right?: BuildNodeLike;
 };
@@ -14,6 +16,19 @@ type SnapshotLike = {
   root: BuildNodeLike;
   activeUid: number;
   nextUid: number;
+};
+
+type RegistryEntry = {
+  internalFeature: number;
+  originalName: string;
+  threshold: number;
+};
+
+type CurrentPayload = {
+  meta?: Record<string, unknown> & {
+    featureRegistry?: RegistryEntry[];
+    featureNames?: string[];
+  };
 };
 
 type HookLike = {
@@ -43,6 +58,7 @@ type StarredTree = {
   snapshot: SnapshotLike;
   signature: string;
   savedAt: number;
+  splitRules: string[];
   accuracy?: string;
 };
 
@@ -77,6 +93,65 @@ function isSnapshot(value: unknown): value is SnapshotLike {
     Number.isInteger(x.activeUid) &&
     Number.isInteger(x.nextUid)
   );
+}
+
+function currentPayload(): CurrentPayload | undefined {
+  const w = window as Window & Record<string, unknown>;
+  return (
+    w.ARBORENUM_CURRENT_BUILDER_PAYLOAD ??
+    w.ARBORENUM_BUILDER_PAYLOAD ??
+    w.PRAXIS_BUILDER_PAYLOAD
+  ) as CurrentPayload | undefined;
+}
+
+function registry(): RegistryEntry[] {
+  const raw = currentPayload()?.meta?.featureRegistry;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => ({
+      internalFeature: Number(entry.internalFeature),
+      originalName: String(entry.originalName),
+      threshold: Number(entry.threshold),
+    }))
+    .filter(
+      (entry) =>
+        Number.isInteger(entry.internalFeature) &&
+        entry.originalName.length > 0 &&
+        Number.isFinite(entry.threshold),
+    );
+}
+
+function formatThreshold(value: number): string {
+  return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function fallbackSplitRule(feature: number | undefined): string {
+  if (feature === undefined) return 'split';
+  const entry = registry().find((x) => x.internalFeature === feature);
+  if (entry) return `${entry.originalName} ≤ ${formatThreshold(entry.threshold)}`;
+
+  const names = currentPayload()?.meta?.featureNames;
+  const name = Array.isArray(names) ? names[feature] : undefined;
+  return name ? String(name) : `feature ${feature}`;
+}
+
+function splitRulesFromSnapshot(snapshot: SnapshotLike): string[] {
+  const rules: string[] = [];
+
+  const walk = (node?: BuildNodeLike) => {
+    if (!node) return;
+    if (node.kind === 'split') {
+      const domTitle = document
+        .querySelector<HTMLElement>(`.react-flow__node-praxis[data-id="${node.uid}"] .node-title`)
+        ?.textContent?.trim();
+      rules.push(domTitle || fallbackSplitRule(node.feature));
+    }
+    walk(node.left);
+    walk(node.right);
+  };
+
+  walk(snapshot.root);
+  return rules;
 }
 
 function nodeCounts(root: BuildNodeLike): TreeCounts {
@@ -151,11 +226,7 @@ function findSnapshotHooks(start?: FiberLike): SnapshotBridge[] {
             typeof hook.next.queue?.dispatch === 'function'
               ? hook.next
               : undefined;
-          out.push({
-            snapshot: hook.memoizedState,
-            snapshotHook: hook,
-            historyHook,
-          });
+          out.push({ snapshot: hook.memoizedState, snapshotHook: hook, historyHook });
         }
         hook = hook.next ?? (undefined as unknown as HookLike);
       }
@@ -225,7 +296,10 @@ function restoreStar(tree: StarredTree) {
 
   bridge.snapshotHook.queue.dispatch(cloneSnapshot(tree.snapshot));
   closeGallery();
-  afterReactPaint(renderToolbar);
+  afterReactPaint(() => {
+    organizeControls();
+    renderHeaderControls();
+  });
 }
 
 function starCurrentTree() {
@@ -244,17 +318,19 @@ function starCurrentTree() {
       snapshot,
       signature,
       savedAt: Date.now(),
+      splitRules: splitRulesFromSnapshot(snapshot),
       accuracy: counts.open === 0 ? completedAccuracyFromDom() : undefined,
     });
     nextStarId += 1;
   }
 
-  openGallery();
+  // Star means save only. Opening the gallery is a separate action.
+  renderHeaderControls();
 }
 
 function removeStar(id: number) {
   starred = starred.filter((x) => x.id !== id);
-  renderToolbar();
+  renderHeaderControls();
   renderGallery();
 }
 
@@ -348,34 +424,69 @@ function makeTreeThumbnail(tree: StarredTree): SVGSVGElement {
   return svg;
 }
 
+function findToolbarButton(prefix: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('.toolbar-row .ghost-button')).find(
+    (button) => button.textContent?.trim().toLowerCase().startsWith(prefix),
+  );
+}
+
+function organizeControls() {
+  const toolbar = document.querySelector('.toolbar-row');
+  if (!toolbar) return;
+
+  const undo = findToolbarButton('undo');
+  const reset = findToolbarButton('reset');
+  const random = findToolbarButton('random');
+  const optimal = findToolbarButton('optimal');
+  const exportButton = findToolbarButton('export');
+  const constrained = document.getElementById('arborenum-constrained-completion-button') as HTMLButtonElement | null;
+
+  undo?.classList.add('arborenum-hidden-control');
+  reset?.classList.add('arborenum-hidden-control');
+  exportButton?.classList.add('arborenum-hidden-control', 'arborenum-original-export');
+
+  random?.classList.add('arborenum-completion-random');
+  optimal?.classList.add('arborenum-completion-optimal');
+  constrained?.classList.add('arborenum-completion-constrained');
+
+  let label = document.getElementById(COMPLETION_LABEL_ID);
+  if (!label) {
+    label = document.createElement('div');
+    label.id = COMPLETION_LABEL_ID;
+    label.className = 'arborenum-completion-label';
+    label.innerHTML = '<b>Complete tree</b><span>Fill every unfinished node</span>';
+    toolbar.prepend(label);
+  }
+}
+
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
 
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    /* The original first two direct toolbar buttons are Undo and Reset. */
-    .toolbar-row > button.ghost-button:nth-of-type(1),
-    .toolbar-row > button.ghost-button:nth-of-type(2) {
+    .arborenum-hidden-control {
       display: none !important;
     }
 
-    #${WRAP_ID} {
-      display: inline-flex;
+    .header-actions {
+      display: grid !important;
+      grid-template-columns: auto auto auto;
       align-items: center;
-      gap: 6px;
+      justify-content: end;
+      gap: 7px 9px !important;
     }
 
-    .starred-tree-save,
-    .starred-tree-open {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
+    #${HEADER_ROW_ID} {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
     }
 
-    .starred-tree-icon {
-      font-size: 15px;
-      line-height: 1;
+    #${HEADER_ROW_ID} .ghost-button {
+      min-width: 104px;
+      white-space: nowrap;
     }
 
     .starred-tree-count {
@@ -393,6 +504,37 @@ function injectStyles() {
       line-height: 1;
     }
 
+    .toolbar-row {
+      grid-template-columns: repeat(3, 1fr) !important;
+    }
+
+    .arborenum-completion-label {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 1px 2px 2px;
+      order: 0;
+    }
+
+    .arborenum-completion-label b {
+      color: #334155;
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .arborenum-completion-label span {
+      color: #94a3b8;
+      font-size: 9px;
+      font-weight: 750;
+    }
+
+    .arborenum-completion-optimal { order: 1; }
+    .arborenum-completion-random { order: 2; }
+    .arborenum-completion-constrained { order: 3; }
+
     .starred-overlay {
       position: fixed;
       inset: 0;
@@ -406,8 +548,8 @@ function injectStyles() {
     }
 
     .starred-gallery {
-      width: min(980px, calc(100vw - 56px));
-      max-height: min(760px, calc(100vh - 56px));
+      width: min(1040px, calc(100vw - 56px));
+      max-height: min(800px, calc(100vh - 56px));
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -508,7 +650,7 @@ function injectStyles() {
 
     .starred-tree-visual {
       position: relative;
-      height: 122px;
+      height: 116px;
       display: grid;
       place-items: center;
       overflow: hidden;
@@ -518,7 +660,7 @@ function injectStyles() {
 
     .starred-tree-thumbnail {
       width: 94%;
-      height: 104px;
+      height: 100px;
       overflow: visible;
     }
 
@@ -545,7 +687,6 @@ function injectStyles() {
       border-radius: 999px;
       font-size: 8px;
       font-weight: 900;
-      letter-spacing: 0.02em;
     }
 
     .starred-tree-number {
@@ -562,7 +703,7 @@ function injectStyles() {
 
     .starred-tree-card-body {
       display: grid;
-      gap: 9px;
+      gap: 8px;
       padding: 12px;
     }
 
@@ -579,7 +720,6 @@ function injectStyles() {
       font: inherit;
       font-size: 12px;
       font-weight: 900;
-      text-overflow: ellipsis;
     }
 
     .starred-tree-name:hover,
@@ -623,7 +763,6 @@ function injectStyles() {
     }
 
     .starred-tree-summary {
-      min-height: 30px;
       color: #5f7185;
       font-size: 10px;
       font-weight: 750;
@@ -631,10 +770,39 @@ function injectStyles() {
     }
 
     .starred-tree-summary.partial {
-      display: flex;
-      align-items: center;
       color: #7d8997;
       font-weight: 850;
+    }
+
+    .starred-tree-rules {
+      display: grid;
+      gap: 3px;
+      min-height: 42px;
+      padding-top: 7px;
+      border-top: 1px solid #edf2f7;
+    }
+
+    .starred-tree-rules-title {
+      color: #8b99a8;
+      font-size: 8px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .starred-tree-rule {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #40546a;
+      font-size: 9px;
+      font-weight: 780;
+    }
+
+    .starred-tree-rule-more {
+      color: #94a3b8;
+      font-size: 8px;
+      font-weight: 800;
     }
 
     .starred-tree-actions {
@@ -688,9 +856,7 @@ function injectStyles() {
     }
 
     @media (max-width: 900px) {
-      .starred-gallery-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
+      .starred-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 600px) {
@@ -759,6 +925,34 @@ function renderCard(tree: StarredTree, current: string | undefined): HTMLElement
     summary.textContent = 'Partial';
   }
 
+  const rules = document.createElement('div');
+  rules.className = 'starred-tree-rules';
+  const rulesTitle = document.createElement('div');
+  rulesTitle.className = 'starred-tree-rules-title';
+  rulesTitle.textContent = tree.splitRules.length === 1 ? 'Split' : 'Splits';
+  rules.appendChild(rulesTitle);
+
+  if (tree.splitRules.length === 0) {
+    const rule = document.createElement('div');
+    rule.className = 'starred-tree-rule-more';
+    rule.textContent = 'No splits yet';
+    rules.appendChild(rule);
+  } else {
+    for (const split of tree.splitRules.slice(0, 4)) {
+      const rule = document.createElement('div');
+      rule.className = 'starred-tree-rule';
+      rule.title = split;
+      rule.textContent = split;
+      rules.appendChild(rule);
+    }
+    if (tree.splitRules.length > 4) {
+      const more = document.createElement('div');
+      more.className = 'starred-tree-rule-more';
+      more.textContent = `+${tree.splitRules.length - 4} more split${tree.splitRules.length - 4 === 1 ? '' : 's'}`;
+      rules.appendChild(more);
+    }
+  }
+
   const actions = document.createElement('div');
   actions.className = 'starred-tree-actions';
 
@@ -777,7 +971,7 @@ function renderCard(tree: StarredTree, current: string | undefined): HTMLElement
   remove.addEventListener('click', () => removeStar(tree.id));
 
   actions.append(restore, remove);
-  body.append(name, statusRow, summary, actions);
+  body.append(name, statusRow, summary, rules, actions);
   card.append(visual, body);
   return card;
 }
@@ -814,7 +1008,7 @@ function renderGallery() {
   const title = document.createElement('b');
   title.textContent = `Favorite trees${starred.length ? ` (${starred.length})` : ''}`;
   const subtitle = document.createElement('span');
-  subtitle.textContent = 'Save different directions, rename them, and jump between partial or completed trees.';
+  subtitle.textContent = 'Saved partial and completed trees. Rename them or open any saved direction.';
   copy.append(title, subtitle);
 
   const close = document.createElement('button');
@@ -831,7 +1025,7 @@ function renderGallery() {
   if (starred.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'starred-gallery-empty';
-    empty.textContent = 'No favorites yet. Close this window, build or modify a tree, and press ☆ Star when you want to save that exact state.';
+    empty.textContent = 'No favorites yet. Build or modify a tree and press ☆ Star to save that exact state.';
     grid.appendChild(empty);
   } else {
     const current = currentSignature();
@@ -845,39 +1039,45 @@ function renderGallery() {
   document.body.appendChild(overlay);
 }
 
-function renderToolbar() {
+function renderHeaderControls() {
   injectStyles();
 
-  const toolbar = document.querySelector('.toolbar-row');
-  if (!toolbar) return;
+  const headerActions = document.querySelector('.header-actions');
+  if (!headerActions) return;
 
-  let wrap = document.getElementById(WRAP_ID);
-  if (!wrap) {
-    wrap = document.createElement('div');
-    wrap.id = WRAP_ID;
-    toolbar.prepend(wrap);
+  let row = document.getElementById(HEADER_ROW_ID);
+  if (!row) {
+    row = document.createElement('div');
+    row.id = HEADER_ROW_ID;
+    headerActions.appendChild(row);
   }
-
-  wrap.replaceChildren();
+  row.replaceChildren();
 
   const save = document.createElement('button');
   save.type = 'button';
-  save.className = 'ghost-button starred-tree-save';
-  save.innerHTML = '<span class="starred-tree-icon">☆</span> Star';
+  save.className = 'ghost-button';
+  save.innerHTML = '☆ Star';
   save.title = 'Save the exact current partial or completed tree';
   save.addEventListener('click', starCurrentTree);
 
   const favorites = document.createElement('button');
   favorites.type = 'button';
-  favorites.className = 'ghost-button starred-tree-open';
-  favorites.innerHTML = `<span class="starred-tree-icon">★</span> Favorites <span class="starred-tree-count">${starred.length}</span>`;
+  favorites.className = 'ghost-button';
+  favorites.innerHTML = `★ Favorites <span class="starred-tree-count">${starred.length}</span>`;
   favorites.title = 'Browse favorite trees';
   favorites.addEventListener('click', () => {
     if (open) closeGallery();
     else openGallery();
   });
 
-  wrap.append(save, favorites);
+  const exportButton = document.createElement('button');
+  exportButton.type = 'button';
+  exportButton.className = 'ghost-button';
+  exportButton.textContent = '⇩ Export';
+  exportButton.title = 'Export the current tree';
+  exportButton.addEventListener('click', () => findToolbarButton('export')?.click());
+
+  row.append(save, favorites, exportButton);
 }
 
 document.addEventListener('keydown', (event) => {
@@ -892,17 +1092,25 @@ document.addEventListener(
       starred = [];
       nextStarId = 1;
       closeGallery();
-      requestAnimationFrame(renderToolbar);
+      requestAnimationFrame(renderHeaderControls);
     }
   },
   true,
 );
 
 const observer = new MutationObserver(() => {
-  if (document.querySelector('.toolbar-row') && !document.getElementById(WRAP_ID)) {
-    renderToolbar();
+  organizeControls();
+  if (document.querySelector('.header-actions') && !document.getElementById(HEADER_ROW_ID)) {
+    renderHeaderControls();
   }
 });
-observer.observe(document.documentElement, { childList: true, subtree: true });
+observer.observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ['disabled'],
+});
 
-renderToolbar();
+injectStyles();
+organizeControls();
+renderHeaderControls();
