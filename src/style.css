@@ -126,11 +126,11 @@ textarea {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
-.react-flow__node-praxis {
+.react-flow__node-arborenum {
   width: 420px;
 }
 
-.praxis-node {
+.arborenum-node {
   position: relative;
   min-height: 128px;
   width: 420px;
@@ -148,23 +148,23 @@ textarea {
   color: #102033;
 }
 
-.praxis-node.active {
+.arborenum-node.active {
   outline: 3px solid rgba(37, 99, 235, 0.17);
   border-color: #3b82f6;
   box-shadow: 0 10px 28px rgba(37, 99, 235, 0.14);
 }
 
-.praxis-node-split {
+.arborenum-node-split {
   grid-template-columns: 1fr;
   background: var(--split-node-bg, #ffffff);
 }
 
-.praxis-node-choice {
+.arborenum-node-choice {
   background: #fff7ed;
   border-color: #fed7aa;
 }
 
-.praxis-node-leaf {
+.arborenum-node-leaf {
   grid-template-columns: 1fr;
   background: var(--leaf-node-bg, #f0fdf4);
   border-color: #bbf7d0;
@@ -180,13 +180,13 @@ textarea {
   color: #2563eb;
 }
 
-.praxis-node-choice .node-icon {
+.arborenum-node-choice .node-icon {
   background: #ffedd5;
   color: #ea580c;
 }
 
-.praxis-node-split .node-icon,
-.praxis-node-leaf .node-icon {
+.arborenum-node-split .node-icon,
+.arborenum-node-leaf .node-icon {
   display: none;
 }
 
@@ -194,8 +194,8 @@ textarea {
   min-width: 0;
 }
 
-.praxis-node-split .node-copy,
-.praxis-node-leaf .node-copy {
+.arborenum-node-split .node-copy,
+.arborenum-node-leaf .node-copy {
   text-align: center;
   width: 100%;
 }
@@ -212,14 +212,14 @@ textarea {
   letter-spacing: -0.02em;
 }
 
-.praxis-node-split .node-title {
+.arborenum-node-split .node-title {
   max-width: 100%;
   text-align: center;
   font-size: 38px;
 }
 
-.praxis-node-leaf .node-title,
-.praxis-node-leaf .node-subtitle {
+.arborenum-node-leaf .node-title,
+.arborenum-node-leaf .node-subtitle {
   max-width: 100%;
   text-align: center;
 }
@@ -256,7 +256,7 @@ textarea {
   text-align: left;
 }
 
-.praxis-node-split:hover .node-description-popover {
+.arborenum-node-split:hover .node-description-popover {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -345,6 +345,55 @@ textarea {
   color: #64748b;
   font-size: 11px;
   margin-top: 2px;
+}
+
+.rashomon-slack-card {
+  padding: 11px 12px 10px;
+  border: 1px solid #dbe7f1;
+  border-radius: 15px;
+  background: #f8fbff;
+}
+
+.rashomon-slack-head,
+.rashomon-slack-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rashomon-slack-head span {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.rashomon-slack-head b {
+  color: #2563eb;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.rashomon-slack-track {
+  height: 9px;
+  margin: 8px 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5edf5;
+}
+
+.rashomon-slack-fill {
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+  transition: width 0.22s ease;
+}
+
+.rashomon-slack-foot {
+  color: #718096;
+  font-size: 9px;
+  font-weight: 750;
 }
 
 .toolbar-row {
@@ -895,4 +944,3 @@ textarea {
   background: #f8fbff;
   border-color: #93c5fd;
 }
-
