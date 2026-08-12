@@ -1,5 +1,6 @@
 const STYLE_ID = 'arborenum-starred-trees-style';
 const WRAP_ID = 'arborenum-starred-trees-wrap';
+const OVERLAY_ID = 'arborenum-starred-trees-overlay';
 
 type BuildNodeLike = {
   uid: number;
@@ -200,8 +201,7 @@ function completedAccuracyFromDom(): string | undefined {
   if (!completed) return undefined;
 
   for (const row of completed.querySelectorAll<HTMLElement>('.budget-box > div')) {
-    const label = row.querySelector('span')?.textContent?.trim().toLowerCase();
-    if (label === 'accuracy') {
+    if (row.querySelector('span')?.textContent?.trim().toLowerCase() === 'accuracy') {
       return row.querySelector('b')?.textContent?.trim() || undefined;
     }
   }
@@ -224,8 +224,8 @@ function restoreStar(tree: StarredTree) {
   }
 
   bridge.snapshotHook.queue.dispatch(cloneSnapshot(tree.snapshot));
-  open = false;
-  afterReactPaint(render);
+  closeGallery();
+  afterReactPaint(renderToolbar);
 }
 
 function starCurrentTree() {
@@ -236,35 +236,31 @@ function starCurrentTree() {
   const signature = treeSignature(snapshot);
   const existing = starred.find((x) => x.signature === signature);
 
-  if (existing) {
-    open = true;
-    render();
-    return;
+  if (!existing) {
+    const counts = nodeCounts(snapshot.root);
+    starred.push({
+      id: nextStarId,
+      label: `Tree ${nextStarId}`,
+      snapshot,
+      signature,
+      savedAt: Date.now(),
+      accuracy: counts.open === 0 ? completedAccuracyFromDom() : undefined,
+    });
+    nextStarId += 1;
   }
 
-  const counts = nodeCounts(snapshot.root);
-  starred.push({
-    id: nextStarId,
-    label: `Tree ${nextStarId}`,
-    snapshot,
-    signature,
-    savedAt: Date.now(),
-    accuracy: counts.open === 0 ? completedAccuracyFromDom() : undefined,
-  });
-  nextStarId += 1;
-  open = true;
-  render();
+  openGallery();
 }
 
 function removeStar(id: number) {
   starred = starred.filter((x) => x.id !== id);
-  render();
+  renderToolbar();
+  renderGallery();
 }
 
 function renameStar(id: number, label: string) {
   const tree = starred.find((x) => x.id === id);
-  if (!tree) return;
-  tree.label = label.slice(0, 60);
+  if (tree) tree.label = label.slice(0, 60);
 }
 
 function formatSavedTime(time: number): string {
@@ -292,22 +288,21 @@ function thumbnailLayout(root: BuildNodeLike): {
   const visit = (node: BuildNodeLike, depth: number): ThumbPoint => {
     maxDepth = Math.max(maxDepth, depth);
     const children = [node.left, node.right].filter((x): x is BuildNodeLike => !!x);
-    let x: number;
 
     if (children.length === 0) {
-      x = leafX;
-      leafX += 1;
-    } else {
-      const childPoints = children.map((child) => visit(child, depth + 1));
-      x = childPoints.reduce((sum, p) => sum + p.x, 0) / childPoints.length;
-      const point: ThumbPoint = { node, x, depth };
+      const point = { node, x: leafX++, depth };
       points.push(point);
-      for (const childPoint of childPoints) edges.push([point, childPoint]);
       return point;
     }
 
-    const point: ThumbPoint = { node, x, depth };
+    const childPoints = children.map((child) => visit(child, depth + 1));
+    const point = {
+      node,
+      x: childPoints.reduce((sum, p) => sum + p.x, 0) / childPoints.length,
+      depth,
+    };
     points.push(point);
+    childPoints.forEach((child) => edges.push([point, child]));
     return point;
   };
 
@@ -323,13 +318,13 @@ function thumbnailLayout(root: BuildNodeLike): {
 function makeTreeThumbnail(tree: StarredTree): SVGSVGElement {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 220 98');
+  svg.setAttribute('viewBox', '0 0 220 104');
   svg.setAttribute('class', 'starred-tree-thumbnail');
   svg.setAttribute('aria-hidden', 'true');
 
   const layout = thumbnailLayout(tree.snapshot.root);
   const px = (x: number) => 18 + (184 * x) / layout.maxX;
-  const py = (depth: number) => 13 + (70 * depth) / layout.maxDepth;
+  const py = (depth: number) => 14 + (76 * depth) / layout.maxDepth;
 
   for (const [from, to] of layout.edges) {
     const line = document.createElementNS(ns, 'line');
@@ -345,7 +340,7 @@ function makeTreeThumbnail(tree: StarredTree): SVGSVGElement {
     const circle = document.createElementNS(ns, 'circle');
     circle.setAttribute('cx', String(px(point.x)));
     circle.setAttribute('cy', String(py(point.depth)));
-    circle.setAttribute('r', point.node.kind === 'split' ? '4.5' : '4');
+    circle.setAttribute('r', point.node.kind === 'split' ? '4.6' : '4.1');
     circle.setAttribute('class', `starred-thumb-node starred-thumb-${point.node.kind}`);
     svg.appendChild(circle);
   }
@@ -353,28 +348,22 @@ function makeTreeThumbnail(tree: StarredTree): SVGSVGElement {
   return svg;
 }
 
-function hideRedundantToolbarButtons() {
-  const toolbar = document.querySelector('.toolbar-row');
-  if (!toolbar) return;
-
-  for (const button of toolbar.querySelectorAll<HTMLButtonElement>('.ghost-button')) {
-    const text = button.textContent?.trim().toLowerCase() ?? '';
-    if (text.startsWith('undo') || text.startsWith('reset')) {
-      button.hidden = true;
-    }
-  }
-}
-
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
+
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
+    /* The original first two direct toolbar buttons are Undo and Reset. */
+    .toolbar-row > button.ghost-button:nth-of-type(1),
+    .toolbar-row > button.ghost-button:nth-of-type(2) {
+      display: none !important;
+    }
+
     #${WRAP_ID} {
-      position: relative;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
     }
 
     .starred-tree-save,
@@ -397,130 +386,144 @@ function injectStyles() {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      background: #fff7df;
-      color: #9a6700;
+      background: #fff4cf;
+      color: #8b5d00;
       font-size: 9px;
       font-weight: 900;
       line-height: 1;
     }
 
-    .starred-tree-gallery {
-      position: absolute;
-      z-index: 1200;
-      top: calc(100% + 9px);
-      right: 0;
-      width: min(790px, calc(100vw - 36px));
-      max-height: min(650px, calc(100vh - 120px));
+    .starred-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+      background: rgba(15, 23, 42, 0.34);
+      backdrop-filter: blur(4px);
+    }
+
+    .starred-gallery {
+      width: min(980px, calc(100vw - 56px));
+      max-height: min(760px, calc(100vh - 56px));
+      display: flex;
+      flex-direction: column;
       overflow: hidden;
-      padding: 13px;
       border: 1px solid #d7e1eb;
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.98);
-      box-shadow: 0 22px 60px rgba(15, 23, 42, 0.20);
-      backdrop-filter: blur(10px);
+      border-radius: 18px;
+      background: #ffffff;
+      box-shadow: 0 28px 90px rgba(15, 23, 42, 0.28);
     }
 
     .starred-gallery-head {
+      flex: 0 0 auto;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 14px;
-      padding: 2px 3px 12px;
-      border-bottom: 1px solid #edf2f7;
+      gap: 18px;
+      padding: 18px 20px 16px;
+      border-bottom: 1px solid #e8eef5;
     }
 
     .starred-gallery-head-copy {
       display: grid;
-      gap: 2px;
+      gap: 4px;
     }
 
     .starred-gallery-head-copy b {
-      color: #1e293b;
-      font-size: 14px;
+      color: #17263a;
+      font-size: 18px;
     }
 
     .starred-gallery-head-copy span {
-      color: #64748b;
-      font-size: 10px;
-      line-height: 1.35;
+      color: #66788d;
+      font-size: 11px;
+      line-height: 1.4;
     }
 
     .starred-gallery-close {
-      width: 29px;
-      height: 29px;
-      border: 1px solid #e2e8f0;
-      border-radius: 9px;
-      background: #f8fafc;
-      color: #64748b;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      border: 1px solid #dbe4ee;
+      border-radius: 10px;
+      background: #f7f9fc;
+      color: #607086;
       cursor: pointer;
-      font-size: 17px;
+      font-size: 20px;
       line-height: 1;
     }
 
     .starred-gallery-grid {
+      flex: 1 1 auto;
+      min-height: 0;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      max-height: min(555px, calc(100vh - 205px));
+      align-content: start;
+      gap: 14px;
       overflow-y: auto;
-      padding: 12px 3px 3px;
+      padding: 18px 20px 22px;
+      background: #f7f9fc;
       scrollbar-gutter: stable;
     }
 
     .starred-gallery-empty {
       grid-column: 1 / -1;
+      min-height: 290px;
       display: grid;
       place-items: center;
-      min-height: 170px;
-      padding: 26px;
-      border: 1px dashed #cbd5e1;
-      border-radius: 13px;
-      color: #94a3b8;
+      padding: 30px;
+      border: 1px dashed #bfd0df;
+      border-radius: 15px;
+      background: #ffffff;
+      color: #8a9bae;
       text-align: center;
-      font-size: 11px;
-      line-height: 1.5;
+      font-size: 12px;
+      line-height: 1.55;
     }
 
     .starred-tree-card {
       position: relative;
       min-width: 0;
       overflow: hidden;
-      border: 1px solid #dbe4ee;
-      border-radius: 13px;
+      border: 1px solid #d8e3ed;
+      border-radius: 15px;
       background: #ffffff;
       box-shadow: 0 3px 10px rgba(15, 23, 42, 0.04);
-      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
     }
 
     .starred-tree-card:hover {
-      transform: translateY(-2px);
-      border-color: #e4bb48;
-      box-shadow: 0 12px 26px rgba(15, 23, 42, 0.11);
+      transform: translateY(-3px);
+      border-color: #dfb43d;
+      box-shadow: 0 14px 32px rgba(15, 23, 42, 0.13);
     }
 
     .starred-tree-card.current {
-      border-color: #78a9d1;
-      box-shadow: 0 0 0 2px rgba(0, 114, 178, 0.10), 0 8px 22px rgba(15, 23, 42, 0.08);
+      border-color: #5c9dcc;
+      box-shadow: 0 0 0 2px rgba(0, 114, 178, 0.10), 0 9px 25px rgba(15, 23, 42, 0.08);
     }
 
     .starred-tree-visual {
       position: relative;
-      height: 104px;
+      height: 122px;
       display: grid;
       place-items: center;
       overflow: hidden;
-      border-bottom: 1px solid #edf2f7;
-      background: linear-gradient(180deg, #f8fbfe 0%, #ffffff 100%);
+      border-bottom: 1px solid #eaf0f5;
+      background: linear-gradient(180deg, #f5f9fc 0%, #ffffff 100%);
     }
 
     .starred-tree-thumbnail {
       width: 94%;
-      height: 90px;
+      height: 104px;
       overflow: visible;
     }
 
     .starred-thumb-edge {
-      stroke: #9eb2c6;
+      stroke: #9fb3c7;
       stroke-width: 2.3;
       stroke-linecap: round;
     }
@@ -530,15 +533,15 @@ function injectStyles() {
       stroke-width: 1.6;
     }
 
-    .starred-thumb-split { fill: #4b87b6; }
-    .starred-thumb-leaf { fill: #6ca980; }
-    .starred-thumb-choice { fill: #d49b2a; }
+    .starred-thumb-split { fill: #4f8bb8; }
+    .starred-thumb-leaf { fill: #67a77d; }
+    .starred-thumb-choice { fill: #d49a26; }
 
     .starred-tree-number,
     .starred-tree-current-badge {
       position: absolute;
-      top: 8px;
-      padding: 3px 6px;
+      top: 9px;
+      padding: 4px 7px;
       border-radius: 999px;
       font-size: 8px;
       font-weight: 900;
@@ -546,21 +549,21 @@ function injectStyles() {
     }
 
     .starred-tree-number {
-      left: 8px;
-      background: #fff7df;
-      color: #956200;
+      left: 9px;
+      background: #fff4cf;
+      color: #855800;
     }
 
     .starred-tree-current-badge {
-      right: 8px;
-      background: #e8f3fb;
-      color: #00679f;
+      right: 9px;
+      background: #e4f1fa;
+      color: #00679d;
     }
 
     .starred-tree-card-body {
       display: grid;
-      gap: 7px;
-      padding: 10px;
+      gap: 9px;
+      padding: 12px;
     }
 
     .starred-tree-name {
@@ -568,13 +571,13 @@ function injectStyles() {
       min-width: 0;
       box-sizing: border-box;
       border: 1px solid transparent;
-      border-radius: 7px;
-      padding: 4px 5px;
-      margin: -4px -5px 0;
+      border-radius: 8px;
+      padding: 5px 6px;
+      margin: -5px -6px 0;
       background: transparent;
       color: #25364a;
       font: inherit;
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 900;
       text-overflow: ellipsis;
     }
@@ -583,7 +586,7 @@ function injectStyles() {
     .starred-tree-name:focus {
       outline: none;
       border-color: #cbd9e7;
-      background: #f8fbfe;
+      background: #f7fafc;
     }
 
     .starred-tree-status-row {
@@ -594,55 +597,52 @@ function injectStyles() {
     }
 
     .starred-tree-status {
-      display: inline-flex;
-      align-items: center;
-      width: fit-content;
-      padding: 3px 7px;
+      padding: 4px 8px;
       border-radius: 999px;
       font-size: 8px;
       font-weight: 900;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.05em;
     }
 
     .starred-tree-status.partial {
-      background: #fff7df;
-      color: #8a5a00;
+      background: #fff4cf;
+      color: #855800;
     }
 
     .starred-tree-status.complete {
-      background: #e9f7ee;
-      color: #27733f;
+      background: #e7f6ec;
+      color: #24713c;
     }
 
     .starred-tree-time {
-      color: #94a3b8;
+      color: #99a7b6;
       font-size: 8px;
       font-weight: 750;
       white-space: nowrap;
     }
 
     .starred-tree-summary {
-      min-height: 26px;
-      color: #607086;
-      font-size: 9px;
+      min-height: 30px;
+      color: #5f7185;
+      font-size: 10px;
       font-weight: 750;
-      line-height: 1.35;
+      line-height: 1.4;
     }
 
     .starred-tree-summary.partial {
       display: flex;
       align-items: center;
-      color: #7c8796;
-      font-weight: 800;
+      color: #7d8997;
+      font-weight: 850;
     }
 
     .starred-tree-actions {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 6px;
-      opacity: 0.68;
-      transition: opacity 0.15s ease;
+      gap: 7px;
+      opacity: 0.72;
+      transition: opacity 0.16s ease;
     }
 
     .starred-tree-card:hover .starred-tree-actions,
@@ -652,43 +652,51 @@ function injectStyles() {
 
     .starred-tree-open-card,
     .starred-tree-delete {
-      min-height: 29px;
-      border: 1px solid #dbe4ee;
-      border-radius: 8px;
-      background: #f8fbfe;
+      min-height: 32px;
+      border: 1px solid #d7e2ec;
+      border-radius: 9px;
+      background: #f7fafc;
       color: #40546a;
       cursor: pointer;
       font-size: 9px;
       font-weight: 850;
     }
 
-    .starred-tree-open-card:hover {
-      border-color: #83b6d9;
-      background: #eef7fd;
+    .starred-tree-open-card:hover:not(:disabled) {
+      border-color: #79add2;
+      background: #edf7fd;
       color: #075f93;
     }
 
+    .starred-tree-open-card:disabled {
+      cursor: default;
+      color: #6f8398;
+      background: #f2f6f9;
+    }
+
     .starred-tree-delete {
-      width: 31px;
-      background: white;
-      color: #94a3b8;
-      font-size: 14px;
+      width: 34px;
+      background: #ffffff;
+      color: #98a5b3;
+      font-size: 15px;
     }
 
     .starred-tree-delete:hover {
       border-color: #fecaca;
-      background: #fff7f7;
+      background: #fff6f6;
       color: #b42318;
     }
 
-    @media (max-width: 980px) {
-      .starred-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .starred-tree-gallery { width: min(560px, calc(100vw - 28px)); }
+    @media (max-width: 900px) {
+      .starred-gallery-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
 
-    @media (max-width: 620px) {
-      .starred-gallery-grid { grid-template-columns: 1fr; }
-      .starred-tree-gallery { width: min(350px, calc(100vw - 22px)); }
+    @media (max-width: 600px) {
+      .starred-overlay { padding: 12px; }
+      .starred-gallery { width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+      .starred-gallery-grid { grid-template-columns: 1fr; padding: 12px; }
     }
   `;
   document.head.appendChild(style);
@@ -724,16 +732,10 @@ function renderCard(tree: StarredTree, current: string | undefined): HTMLElement
   name.value = tree.label;
   name.title = 'Click to rename';
   name.maxLength = 60;
-  name.addEventListener('click', (event) => event.stopPropagation());
   name.addEventListener('input', () => renameStar(tree.id, name.value));
   name.addEventListener('blur', () => {
-    if (!name.value.trim()) {
-      tree.label = `Tree ${tree.id}`;
-      name.value = tree.label;
-    } else {
-      tree.label = name.value.trim();
-      name.value = tree.label;
-    }
+    tree.label = name.value.trim() || `Tree ${tree.id}`;
+    name.value = tree.label;
   });
 
   const statusRow = document.createElement('div');
@@ -751,7 +753,7 @@ function renderCard(tree: StarredTree, current: string | undefined): HTMLElement
   const summary = document.createElement('div');
   summary.className = `starred-tree-summary ${complete ? 'complete' : 'partial'}`;
   if (complete) {
-    const accuracy = tree.accuracy ? `Accuracy ${tree.accuracy}` : 'Complete tree';
+    const accuracy = tree.accuracy ? `Accuracy ${tree.accuracy}` : 'Complete';
     summary.textContent = `${accuracy} · ${counts.leaves} ${counts.leaves === 1 ? 'leaf' : 'leaves'}`;
   } else {
     summary.textContent = 'Partial';
@@ -780,9 +782,71 @@ function renderCard(tree: StarredTree, current: string | undefined): HTMLElement
   return card;
 }
 
-function render() {
+function closeGallery() {
+  open = false;
+  document.getElementById(OVERLAY_ID)?.remove();
+}
+
+function openGallery() {
+  open = true;
+  renderGallery();
+}
+
+function renderGallery() {
+  document.getElementById(OVERLAY_ID)?.remove();
+  if (!open) return;
+
+  const overlay = document.createElement('div');
+  overlay.id = OVERLAY_ID;
+  overlay.className = 'starred-overlay';
+  overlay.addEventListener('mousedown', (event) => {
+    if (event.target === overlay) closeGallery();
+  });
+
+  const gallery = document.createElement('section');
+  gallery.className = 'starred-gallery';
+
+  const head = document.createElement('div');
+  head.className = 'starred-gallery-head';
+
+  const copy = document.createElement('div');
+  copy.className = 'starred-gallery-head-copy';
+  const title = document.createElement('b');
+  title.textContent = `Favorite trees${starred.length ? ` (${starred.length})` : ''}`;
+  const subtitle = document.createElement('span');
+  subtitle.textContent = 'Save different directions, rename them, and jump between partial or completed trees.';
+  copy.append(title, subtitle);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'starred-gallery-close';
+  close.textContent = '×';
+  close.title = 'Close favorites';
+  close.addEventListener('click', closeGallery);
+  head.append(copy, close);
+
+  const grid = document.createElement('div');
+  grid.className = 'starred-gallery-grid';
+
+  if (starred.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'starred-gallery-empty';
+    empty.textContent = 'No favorites yet. Close this window, build or modify a tree, and press ☆ Star when you want to save that exact state.';
+    grid.appendChild(empty);
+  } else {
+    const current = currentSignature();
+    for (const tree of [...starred].reverse()) {
+      grid.appendChild(renderCard(tree, current));
+    }
+  }
+
+  gallery.append(head, grid);
+  overlay.appendChild(gallery);
+  document.body.appendChild(overlay);
+}
+
+function renderToolbar() {
   injectStyles();
-  hideRedundantToolbarButtons();
 
   const toolbar = document.querySelector('.toolbar-row');
   if (!toolbar) return;
@@ -801,85 +865,23 @@ function render() {
   save.className = 'ghost-button starred-tree-save';
   save.innerHTML = '<span class="starred-tree-icon">☆</span> Star';
   save.title = 'Save the exact current partial or completed tree';
-  save.addEventListener('click', (event) => {
-    event.stopPropagation();
-    starCurrentTree();
+  save.addEventListener('click', starCurrentTree);
+
+  const favorites = document.createElement('button');
+  favorites.type = 'button';
+  favorites.className = 'ghost-button starred-tree-open';
+  favorites.innerHTML = `<span class="starred-tree-icon">★</span> Favorites <span class="starred-tree-count">${starred.length}</span>`;
+  favorites.title = 'Browse favorite trees';
+  favorites.addEventListener('click', () => {
+    if (open) closeGallery();
+    else openGallery();
   });
-  wrap.appendChild(save);
 
-  const openButton = document.createElement('button');
-  openButton.type = 'button';
-  openButton.className = 'ghost-button starred-tree-open';
-  openButton.innerHTML = `<span class="starred-tree-icon">★</span> Favorites <span class="starred-tree-count">${starred.length}</span>`;
-  openButton.title = 'Browse starred trees';
-  openButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    open = !open;
-    render();
-  });
-  wrap.appendChild(openButton);
-
-  if (!open) return;
-
-  const gallery = document.createElement('div');
-  gallery.className = 'starred-tree-gallery';
-  gallery.addEventListener('click', (event) => event.stopPropagation());
-
-  const head = document.createElement('div');
-  head.className = 'starred-gallery-head';
-
-  const copy = document.createElement('div');
-  copy.className = 'starred-gallery-head-copy';
-  const title = document.createElement('b');
-  title.textContent = 'Favorite trees';
-  const subtitle = document.createElement('span');
-  subtitle.textContent = 'Save different directions, name them, and jump between them whenever you want.';
-  copy.append(title, subtitle);
-
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'starred-gallery-close';
-  close.textContent = '×';
-  close.title = 'Close favorites';
-  close.addEventListener('click', () => {
-    open = false;
-    render();
-  });
-  head.append(copy, close);
-
-  const grid = document.createElement('div');
-  grid.className = 'starred-gallery-grid';
-
-  if (starred.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'starred-gallery-empty';
-    empty.textContent = 'No favorites yet. Star the current tree, explore another branch, and come back here when you want to compare directions.';
-    grid.appendChild(empty);
-  } else {
-    const current = currentSignature();
-    for (const tree of [...starred].reverse()) {
-      grid.appendChild(renderCard(tree, current));
-    }
-  }
-
-  gallery.append(head, grid);
-  wrap.appendChild(gallery);
+  wrap.append(save, favorites);
 }
 
-document.addEventListener('click', (event) => {
-  const target = event.target;
-  if (!(target instanceof Element)) return;
-  if (open && !target.closest(`#${WRAP_ID}`)) {
-    open = false;
-    requestAnimationFrame(render);
-  }
-});
-
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && open) {
-    open = false;
-    render();
-  }
+  if (event.key === 'Escape' && open) closeGallery();
 });
 
 document.addEventListener(
@@ -889,19 +891,18 @@ document.addEventListener(
     if (target instanceof HTMLInputElement && target.type === 'file') {
       starred = [];
       nextStarId = 1;
-      open = false;
-      requestAnimationFrame(render);
+      closeGallery();
+      requestAnimationFrame(renderToolbar);
     }
   },
   true,
 );
 
 const observer = new MutationObserver(() => {
-  const toolbar = document.querySelector('.toolbar-row');
-  if (!toolbar) return;
-  hideRedundantToolbarButtons();
-  if (!document.getElementById(WRAP_ID)) render();
+  if (document.querySelector('.toolbar-row') && !document.getElementById(WRAP_ID)) {
+    renderToolbar();
+  }
 });
 observer.observe(document.documentElement, { childList: true, subtree: true });
 
-render();
+renderToolbar();
