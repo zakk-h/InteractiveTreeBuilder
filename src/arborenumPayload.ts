@@ -18,14 +18,6 @@ export type ArborEnumBuilderPayload = {
   meta: ArborEnumBuilderMeta;
 };
 
-declare global {
-  interface Window {
-    ARBORENUM_BUILDER_PAYLOAD?: ArborEnumBuilderPayload;
-    ARBORENUM_ANDOR_GRAPH?: AndOrGraph;
-    ARBORENUM_ANDOR_META?: ArborEnumBuilderMeta;
-  }
-}
-
 function validateFeatureRegistry(registry: unknown): ArborEnumFeatureRegistryEntry[] {
   if (!Array.isArray(registry)) {
     throw new Error('ArborEnum payload meta.featureRegistry must be an array.');
@@ -154,10 +146,13 @@ JSON.parse = ((text: string, reviver?: (this: unknown, key: string, value: unkno
 }) as typeof JSON.parse;
 
 // Normalize the payload embedded by ArborEnum.save_builder_html().
-const embeddedPayload = window.ARBORENUM_BUILDER_PAYLOAD;
+const internalWindow = window as Window & Record<string, unknown>;
+const embeddedPayload = internalWindow.ARBORENUM_BUILDER_PAYLOAD as
+  | ArborEnumBuilderPayload
+  | undefined;
+
 if (embeddedPayload) {
   const normalized = normalizeArborEnumPayload(embeddedPayload);
-  const internalWindow = window as Window & Record<string, unknown>;
   rememberCurrentPayload(normalized);
   internalWindow.ARBORENUM_BUILDER_PAYLOAD = normalized;
   internalWindow.ARBORENUM_ANDOR_GRAPH = normalized.graph;
