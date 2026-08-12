@@ -1,0 +1,25 @@
+.starred-gallery-head-copy b {
+  font-size: 23px !important;
+  line-height: 1.15 !important;
+}
+
+.starred-gallery-head-copy span {
+  font-size: 14px !important;
+  line-height: 1.45 !important;
+}
+
+.starred-gallery-head {
+  padding: 20px 22px 18px !important;
+}
+
+.starred-gallery-grid {
+  gap: 16px !important;
+  padding: 20px 22px 24px !important;
+}
+
+.starred-tree-visual {
+  height: 126px !important;
+}
+
+.starred-tree-card-body {
+  gap: 11
