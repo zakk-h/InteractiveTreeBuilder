@@ -21,6 +21,8 @@ export type ArborEnumBuilderPayload = {
 declare global {
   interface Window {
     ARBORENUM_BUILDER_PAYLOAD?: ArborEnumBuilderPayload;
+    ARBORENUM_ANDOR_GRAPH?: AndOrGraph;
+    ARBORENUM_ANDOR_META?: ArborEnumBuilderMeta;
   }
 }
 
@@ -157,7 +159,7 @@ if (embeddedPayload) {
   const normalized = normalizeArborEnumPayload(embeddedPayload);
   const internalWindow = window as Window & Record<string, unknown>;
   rememberCurrentPayload(normalized);
-  internalWindow.PRAXIS_BUILDER_PAYLOAD = normalized;
-  internalWindow.PRAXIS_ANDOR_GRAPH = normalized.graph;
-  internalWindow.PRAXIS_ANDOR_META = normalized.meta;
+  internalWindow.ARBORENUM_BUILDER_PAYLOAD = normalized;
+  internalWindow.ARBORENUM_ANDOR_GRAPH = normalized.graph;
+  internalWindow.ARBORENUM_ANDOR_META = normalized.meta;
 }
