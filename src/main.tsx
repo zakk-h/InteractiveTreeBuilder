@@ -292,14 +292,17 @@ function coerceMeta(
     gamma:
       payloadMeta.gamma ??
       payload?.gamma ??
-      globalMeta.gamma,
+      globalMeta.gamma ??
+      sampleMeta.gamma,
 
     lambda_reg:
       payloadMeta.lambda_reg ??
       payload?.lambda_reg ??
       payload?.lambdaReg ??
       globalMeta.lambda_reg ??
-      globalMeta.lambdaReg,
+      globalMeta.lambdaReg ??
+      sampleMeta.lambda_reg ??
+      sampleMeta.lambdaReg,
   } as FeatureMeta & Record<string, unknown>;
 }
 
@@ -969,7 +972,7 @@ function SidePanel({
           <Sparkles size={19} />
         </div>
         <div>
-          <div className="brand-title">PRAXIS Tree Builder</div>
+          <div className="brand-title">ArborEnum Tree Builder</div>
           <div className="brand-subtitle">Guaranteed Rashomon membership</div>
         </div>
       </div>
