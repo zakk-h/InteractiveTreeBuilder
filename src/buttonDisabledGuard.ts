@@ -1,5 +1,5 @@
-// constrainedCompletion.ts observes disabled-state changes so its button can
-// mirror the Optimal button. Avoid emitting a disabled-attribute mutation when
+// arborenumConstrainedCompletion.ts observes disabled-state changes so its button
+// can mirror the Optimal button. Avoid emitting a disabled-attribute mutation when
 // a caller writes the value the button already has; otherwise the observer can
 // trigger itself indefinitely after a completion disables the toolbar buttons.
 const descriptor = Object.getOwnPropertyDescriptor(
