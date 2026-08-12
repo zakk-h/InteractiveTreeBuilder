@@ -149,7 +149,7 @@ function actionFromClick(target: Element): string | undefined {
   const toolbar = target.closest<HTMLButtonElement>('.toolbar-row .ghost-button');
   if (toolbar) {
     const text = toolbar.textContent?.trim().toLowerCase() ?? '';
-    if (text.startsWith('undo')) return undefined;
+    if (text.startsWith('undo') || text.startsWith('history')) return undefined;
     if (text.startsWith('reset')) return 'Reset tree';
     if (text.startsWith('random') && !toolbar.disabled) return 'Random completion';
     if (text.startsWith('optimal') && !toolbar.disabled) return 'Optimal completion';
@@ -262,8 +262,9 @@ document.addEventListener(
     const target = event.target;
     if (!(target instanceof Element)) return;
 
-    if (!target.closest(`#${WRAP_ID}`)) {
+    if (!target.closest(`#${WRAP_ID}`) && open) {
       open = false;
+      requestAnimationFrame(render);
     }
 
     const undo = target.closest<HTMLButtonElement>('.toolbar-row .ghost-button');
@@ -286,14 +287,24 @@ document.addEventListener(
   true,
 );
 
-const fileInput = document.querySelector<HTMLInputElement>('input[type="file"]');
-fileInput?.addEventListener('change', () => {
-  entries = [];
-  open = false;
-  requestAnimationFrame(render);
-});
+document.addEventListener(
+  'change',
+  (event) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.type === 'file') {
+      entries = [];
+      open = false;
+      requestAnimationFrame(render);
+    }
+  },
+  true,
+);
 
-const observer = new MutationObserver(() => render());
+const observer = new MutationObserver(() => {
+  if (document.querySelector('.toolbar-row') && !historyWrap()) {
+    render();
+  }
+});
 observer.observe(document.documentElement, { childList: true, subtree: true });
 
 document.addEventListener('keydown', (event) => {
