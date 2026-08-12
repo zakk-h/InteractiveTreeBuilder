@@ -23,8 +23,6 @@ type NativeSplitCard = {
 type AvailableCut = RegistryEntry & NativeSplitCard;
 
 type AvailableInterval = {
-  startIndex: number;
-  endIndex: number;
   cuts: AvailableCut[];
 };
 
@@ -87,6 +85,15 @@ function injectStyles() {
   style.id = STYLE_ID;
   style.textContent = `
     .threshold-native-hidden {
+      display: none !important;
+    }
+
+    /*
+     * This rule is the no-flash guard. It is present before main.tsx renders.
+     * The moment React creates an 11th feasible split card, the browser hides
+     * the native grid during style calculation, before it can ever be painted.
+     */
+    .choice-panel .choice-grid:has(> .choice-card.split-choice:nth-child(11)) {
       display: none !important;
     }
 
@@ -288,8 +295,7 @@ function contiguousAvailableIntervals(
   const intervals: AvailableInterval[] = [];
   let current: AvailableInterval | undefined;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+  for (const candidate of candidates) {
     const native = availableByFeature.get(candidate.internalFeature);
 
     if (!native) {
@@ -306,15 +312,10 @@ function contiguousAvailableIntervals(
     };
 
     if (!current) {
-      current = {
-        startIndex: i,
-        endIndex: i,
-        cuts: [cut],
-      };
+      current = { cuts: [cut] };
       continue;
     }
 
-    current.endIndex = i;
     current.cuts.push(cut);
   }
 
@@ -347,22 +348,14 @@ function enhanceThresholdPanel() {
   const grid = group?.querySelector('.choice-grid');
   if (!group || !grid) return;
 
-  const countText = group.querySelector('.choice-group-count')?.textContent ?? '';
-  const countMatch = countText.match(/(\d+)\s+choices/i);
-  const totalChoices = countMatch ? Number(countMatch[1]) : 0;
-
-  if (totalChoices < MIN_INTERVAL_PICKER_CHOICES) {
-    restoreNativeControls(panel);
-    return;
-  }
-
   const availableCards = Array.from(grid.querySelectorAll('.choice-card.split-choice'))
     .map(parseFeatureAndSplit)
     .filter((x): x is NativeSplitCard => !!x);
 
-  if (availableCards.length === 0) {
-    grid.classList.add(HIDDEN_CLASS);
-    panel.querySelector('.search-box')?.classList.add(HIDDEN_CLASS);
+  // The dense interval UI is specifically for more than 10 feasible cuts.
+  // Ten or fewer remain in the existing threshold-card UI.
+  if (availableCards.length < MIN_INTERVAL_PICKER_CHOICES) {
+    restoreNativeControls(panel);
     return;
   }
 
@@ -393,7 +386,7 @@ function enhanceThresholdPanel() {
 
   const intervals = contiguousAvailableIntervals(candidates, availableByFeature);
 
-  const signature = `${sectionTitle}|${totalChoices}|${availableCards
+  const signature = `${sectionTitle}|${availableCards
     .map((entry) => entry.feature)
     .sort((a, b) => a - b)
     .join(',')}`;
@@ -404,9 +397,6 @@ function enhanceThresholdPanel() {
   existing?.remove();
   injectStyles();
 
-  // Dense continuous features are owned entirely by this interval picker.
-  // Keeping the native grid hidden from the first observer callback prevents
-  // the old 5-10 style threshold list from flashing before this UI appears.
   grid.classList.add(HIDDEN_CLASS);
   panel.querySelector('.search-box')?.classList.add(HIDDEN_CLASS);
 
@@ -541,10 +531,9 @@ function enhanceThresholdPanel() {
 
 injectStyles();
 
-// This observer is installed before main.tsx. React commits the expanded
-// threshold panel synchronously; MutationObserver runs before the browser's
-// next paint, so dense (>10) features are hidden/replaced without flashing the
-// native threshold-card list first.
+// Loaded before main.tsx. The CSS above suppresses an 11+-card native grid
+// synchronously; this observer only has to replace that already-hidden grid
+// with the interval picker.
 const observer = new MutationObserver(() => {
   enhanceThresholdPanel();
 });
