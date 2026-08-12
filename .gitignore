@@ -44,7 +44,7 @@ Thumbs.db
 .coverage
 htmlcov/
 
-praxis_json_results/
+arborenum_json_results/
 results/
 outputs/
 tmp/
@@ -54,4 +54,5 @@ temp/
 *.pickle
 *.joblib
 *.npy
-*.npzpublic/praxis_payload.js
+*.npz
+public/arborenum_payload.js
