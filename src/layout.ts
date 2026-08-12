@@ -13,86 +13,156 @@ export type LayoutEdge = {
 };
 
 const NODE_WIDTH = 420;
-const NODE_Y_GAP = 220;
-const SIBLING_GAP = 0;
+const SHALLOW_NODE_Y_GAP = 220;
+const HORIZONTAL_NODE_GAP = 44;
+const MIN_CENTER_GAP = NODE_WIDTH + HORIZONTAL_NODE_GAP;
 
-function measure(node: BuildNode, cache: Map<number, number>): number {
-  const cached = cache.get(node.uid);
-  if (cached !== undefined) return cached;
+type RelativePosition = {
+  centerX: number;
+  depth: number;
+};
 
-  let w: number;
-  if (!node.left && !node.right) {
-    w = NODE_WIDTH;
-  } else if (node.left && node.right) {
-    w = measure(node.left, cache) + SIBLING_GAP + measure(node.right, cache);
-  } else if (node.left) {
-    w = Math.max(NODE_WIDTH, measure(node.left, cache));
-  } else {
-    w = Math.max(NODE_WIDTH, measure(node.right!, cache));
-  }
+type SubtreeLayout = {
+  positions: Map<number, RelativePosition>;
+  leftContour: number[];
+  rightContour: number[];
+};
 
-  cache.set(node.uid, w);
-  return w;
+function treeDepth(node: BuildNode): number {
+  const leftDepth = node.left ? treeDepth(node.left) + 1 : 0;
+  const rightDepth = node.right ? treeDepth(node.right) + 1 : 0;
+  return Math.max(leftDepth, rightDepth);
 }
 
-function place(
-  node: BuildNode,
-  depth: number,
-  boxLeft: number,
-  widths: Map<number, number>,
-  pos: Map<number, { centerX: number; y: number }>,
-  edges: LayoutEdge[],
-): void {
-  const w = widths.get(node.uid)!;
-  const centerX = boxLeft + w / 2;
-  pos.set(node.uid, { centerX, y: depth * NODE_Y_GAP });
+function verticalGapFor(root: BuildNode): number {
+  const depth = treeDepth(root);
 
-  if (node.left && node.right) {
-    const lw = widths.get(node.left.uid)!;
-    const rw = widths.get(node.right.uid)!;
+  // Preserve the spacious look for the common shallow case, but keep deep
+  // trees from becoming unnecessarily tiny when fit into the viewport.
+  if (depth <= 4) return SHALLOW_NODE_Y_GAP;
+  if (depth <= 6) return 205;
+  if (depth <= 8) return 190;
+  return 180;
+}
 
-    edges.push({
-      id: `${node.uid}-${node.left.uid}`,
-      source: node.uid,
-      target: node.left.uid,
-      label: depth === 0 ? 'T' : '',
-    });
-    edges.push({
-      id: `${node.uid}-${node.right.uid}`,
-      source: node.uid,
-      target: node.right.uid,
-      label: depth === 0 ? 'F' : '',
-    });
+function shiftedContour(contour: number[], dx: number): number[] {
+  return contour.map((x) => x + dx);
+}
 
-    place(node.left,  depth + 1, boxLeft,                   widths, pos, edges);
-    place(node.right, depth + 1, boxLeft + lw + SIBLING_GAP, widths, pos, edges);
-    return;
+/**
+ * Build a compact tidy-tree layout around this node at x = 0.
+ *
+ * The contours record the leftmost/rightmost occupied node center at every
+ * depth. When two child subtrees are combined, we separate only the contour
+ * levels that actually overlap. This lets empty space in an asymmetric tree
+ * be reused instead of reserving a full rectangular box for every subtree.
+ *
+ * Because every overlapping contour level is kept at least MIN_CENTER_GAP
+ * apart, 420px-wide nodes cannot collide, including across cousin subtrees.
+ */
+function layoutSubtree(node: BuildNode): SubtreeLayout {
+  const left = node.left ? layoutSubtree(node.left) : undefined;
+  const right = node.right ? layoutSubtree(node.right) : undefined;
+
+  const positions = new Map<number, RelativePosition>();
+  positions.set(node.uid, { centerX: 0, depth: 0 });
+
+  if (!left && !right) {
+    return {
+      positions,
+      leftContour: [0],
+      rightContour: [0],
+    };
   }
 
-  if (node.left) {
-    edges.push({
-      id: `${node.uid}-${node.left.uid}`,
-      source: node.uid,
-      target: node.left.uid,
-      label: depth === 0 ? 'T' : '',
-    });
-    const lw = widths.get(node.left.uid)!;
-    const childBoxLeft = boxLeft + (w - lw) / 2;
-    place(node.left, depth + 1, childBoxLeft, widths, pos, edges);
-    return;
+  // A one-child branch is most legible directly below its parent. It also
+  // avoids wasting horizontal space on the sparse side of an imperfect tree.
+  const onlyChild = left ?? right;
+  if (!left || !right) {
+    for (const [uid, p] of onlyChild!.positions) {
+      positions.set(uid, {
+        centerX: p.centerX,
+        depth: p.depth + 1,
+      });
+    }
+
+    return {
+      positions,
+      leftContour: [0, ...onlyChild!.leftContour],
+      rightContour: [0, ...onlyChild!.rightContour],
+    };
   }
 
-  if (node.right) {
-    edges.push({
-      id: `${node.uid}-${node.right.uid}`,
-      source: node.uid,
-      target: node.right!.uid,
-      label: depth === 0 ? 'F' : '',
-    });
-    const rw = widths.get(node.right!.uid)!;
-    const childBoxLeft = boxLeft + (w - rw) / 2;
-    place(node.right!, depth + 1, childBoxLeft, widths, pos, edges);
+  // Find the minimum root-to-root separation that keeps the two child
+  // contours apart at every depth where both subtrees contain nodes.
+  const sharedLevels = Math.min(
+    left.rightContour.length,
+    right.leftContour.length,
+  );
+
+  let childSeparation = MIN_CENTER_GAP;
+  for (let d = 0; d < sharedLevels; d += 1) {
+    childSeparation = Math.max(
+      childSeparation,
+      left.rightContour[d] + MIN_CENTER_GAP - right.leftContour[d],
+    );
   }
+
+  // Keep the parent exactly between its two immediate children. This gives
+  // stable, easy-to-read branch angles while the deeper contours determine
+  // how tightly the subtrees can pack.
+  const leftShift = -childSeparation / 2;
+  const rightShift = childSeparation / 2;
+
+  for (const [uid, p] of left.positions) {
+    positions.set(uid, {
+      centerX: p.centerX + leftShift,
+      depth: p.depth + 1,
+    });
+  }
+
+  for (const [uid, p] of right.positions) {
+    positions.set(uid, {
+      centerX: p.centerX + rightShift,
+      depth: p.depth + 1,
+    });
+  }
+
+  const shiftedLeftLeft = shiftedContour(left.leftContour, leftShift);
+  const shiftedLeftRight = shiftedContour(left.rightContour, leftShift);
+  const shiftedRightLeft = shiftedContour(right.leftContour, rightShift);
+  const shiftedRightRight = shiftedContour(right.rightContour, rightShift);
+
+  const leftContour = [0];
+  const rightContour = [0];
+  const childLevels = Math.max(
+    left.leftContour.length,
+    right.leftContour.length,
+  );
+
+  for (let d = 0; d < childLevels; d += 1) {
+    const leftCandidates: number[] = [];
+    const rightCandidates: number[] = [];
+
+    if (d < shiftedLeftLeft.length) {
+      leftCandidates.push(shiftedLeftLeft[d]);
+      rightCandidates.push(shiftedLeftRight[d]);
+    }
+
+    if (d < shiftedRightLeft.length) {
+      leftCandidates.push(shiftedRightLeft[d]);
+      rightCandidates.push(shiftedRightRight[d]);
+    }
+
+    leftContour.push(Math.min(...leftCandidates));
+    rightContour.push(Math.max(...rightCandidates));
+  }
+
+  return {
+    positions,
+    leftContour,
+    rightContour,
+  };
 }
 
 export function layoutTree(root: BuildNode): {
@@ -101,81 +171,53 @@ export function layoutTree(root: BuildNode): {
 } {
   const nodes: LayoutNode[] = [];
   const edges: LayoutEdge[] = [];
-  const pos = new Map<number, { centerX: number; y: number }>();
-  const widths = new Map<number, number>();
+  const layout = layoutSubtree(root);
+  const yGap = verticalGapFor(root);
 
-  measure(root, widths);
-  place(root, 0, 0, widths, pos, edges);
-
-  function isTerminal(node?: BuildNode): boolean {
-    return !!node && !node.left && !node.right;
-  }
-
-  function pullTerminalChildrenIn(node: BuildNode) {
-    const parent = pos.get(node.uid);
-    if (!parent) return;
-
-    const terminalOffset = NODE_WIDTH * 0.42;
-
-    if (isTerminal(node.left)) {
-      const child = pos.get(node.left!.uid);
-      if (child) child.centerX = parent.centerX - terminalOffset;
-    }
-
-    if (isTerminal(node.right)) {
-      const child = pos.get(node.right!.uid);
-      if (child) child.centerX = parent.centerX + terminalOffset;
-    }
-
-    if (node.left) pullTerminalChildrenIn(node.left);
-    if (node.right) pullTerminalChildrenIn(node.right);
-  }
-
-  function shiftSubtree(node: BuildNode, dx: number) {
-    const p = pos.get(node.uid);
-    if (p) p.centerX += dx;
-    if (node.left) shiftSubtree(node.left, dx);
-    if (node.right) shiftSubtree(node.right, dx);
-  }
-
-  function enforceSiblingMinimums(node: BuildNode) {
-    if (node.left) enforceSiblingMinimums(node.left);
-    if (node.right) enforceSiblingMinimums(node.right);
-
-    if (!node.left || !node.right) return;
-
-    const left = pos.get(node.left.uid);
-    const right = pos.get(node.right.uid);
-    if (!left || !right) return;
-
-    const minCenterGap = NODE_WIDTH * 1.12;
-    const currentGap = right.centerX - left.centerX;
-
-    if (currentGap >= minCenterGap) return;
-
-    const extra = minCenterGap - currentGap;
-    shiftSubtree(node.left, -extra / 2);
-    shiftSubtree(node.right, extra / 2);
-  }
-
-  pullTerminalChildrenIn(root);
-  enforceSiblingMinimums(root);
-
-  function collect(node: BuildNode) {
-    const p = pos.get(node.uid);
+  function collect(node: BuildNode, depth: number): void {
+    const p = layout.positions.get(node.uid);
     if (!p) return;
-    nodes.push({ ...node, x: p.centerX - NODE_WIDTH / 2, y: p.y });
-    if (node.left)  collect(node.left);
-    if (node.right) collect(node.right);
+
+    nodes.push({
+      ...node,
+      x: p.centerX - NODE_WIDTH / 2,
+      y: p.depth * yGap,
+    });
+
+    if (node.left) {
+      edges.push({
+        id: `${node.uid}-${node.left.uid}`,
+        source: node.uid,
+        target: node.left.uid,
+        label: depth === 0 ? 'T' : '',
+      });
+      collect(node.left, depth + 1);
+    }
+
+    if (node.right) {
+      edges.push({
+        id: `${node.uid}-${node.right.uid}`,
+        source: node.uid,
+        target: node.right.uid,
+        label: depth === 0 ? 'F' : '',
+      });
+      collect(node.right, depth + 1);
+    }
   }
 
-  collect(root);
+  collect(root, 0);
 
+  // Keep the visible tree centered around x = 0 regardless of how asymmetric
+  // its branching structure is. React Flow can then fit the real occupied
+  // bounds rather than a large artificial subtree rectangle.
   if (nodes.length > 0) {
     const minX = Math.min(...nodes.map((n) => n.x));
     const maxX = Math.max(...nodes.map((n) => n.x + NODE_WIDTH));
     const midX = 0.5 * (minX + maxX);
-    for (const n of nodes) n.x -= midX;
+
+    for (const n of nodes) {
+      n.x -= midX;
+    }
   }
 
   return { nodes, edges };
