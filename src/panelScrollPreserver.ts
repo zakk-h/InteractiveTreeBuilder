@@ -2,18 +2,40 @@ const PANEL_SELECTOR = '.panel';
 const CHOICE_PANEL_SELECTOR = '.panel-section.choice-panel';
 const ENTER_THRESHOLD_SELECTOR = '.feature-summary-card';
 const EXIT_THRESHOLD_SELECTOR = '.back-button';
+const ANCHOR_GAP = 8;
+
+function choicePanelTop(panel: HTMLElement, choicePanel: HTMLElement): number {
+  const panelRect = panel.getBoundingClientRect();
+  const choiceRect = choicePanel.getBoundingClientRect();
+
+  // Convert the section's current viewport position back into the panel's
+  // scroll coordinate system. This remains correct even if the browser briefly
+  // clamps scrollTop while React swaps a tall feature list for a short chooser.
+  return Math.max(
+    0,
+    panel.scrollTop + choiceRect.top - panelRect.top - ANCHOR_GAP,
+  );
+}
 
 function restoreScrollPosition(
   panel: HTMLElement,
   choicePanel: HTMLElement,
-  targetTop: number,
+  requestedTop: number,
+  keepChoicePanelTopVisible: boolean,
 ) {
   if (!panel.isConnected || !choicePanel.isConnected) return;
+
+  // Preserve the user's position unless doing so would put the selected
+  // feature's threshold section above the viewport. In that case, move upward
+  // only as far as the top of that section (e.g. "Thresholds for Whole_weight").
+  const targetTop = keepChoicePanelTopVisible
+    ? Math.min(requestedTop, choicePanelTop(panel, choicePanel))
+    : requestedTop;
 
   // A compact threshold/range chooser can be much shorter than the feature
   // list it replaces. If the whole panel becomes too short, the browser has
   // no choice but to clamp scrollTop upward. Give only the choice section the
-  // extra height required to keep the user's current viewport reachable.
+  // extra height required to keep the desired viewport reachable.
   const requiredScrollHeight = targetTop + panel.clientHeight;
   const deficit = requiredScrollHeight - panel.scrollHeight;
 
@@ -28,13 +50,20 @@ function restoreScrollPosition(
 function preserveThroughMenuSwap(
   panel: HTMLElement,
   choicePanel: HTMLElement,
-  targetTop: number,
+  requestedTop: number,
+  keepChoicePanelTopVisible: boolean,
 ) {
-  const restore = () => restoreScrollPosition(panel, choicePanel, targetTop);
+  const restore = () =>
+    restoreScrollPosition(
+      panel,
+      choicePanel,
+      requestedTop,
+      keepChoicePanelTopVisible,
+    );
 
   // React updates synchronously from the click, while Framer Motion may adjust
   // layout for another frame or two. Restore before the next paint and for a
-  // few following frames so neither path can pull the panel back to the top.
+  // few following frames so neither path can pull the panel somewhere else.
   queueMicrotask(restore);
 
   let frames = 0;
@@ -65,19 +94,18 @@ document.addEventListener(
       return;
     }
 
-    const targetTop = panel.scrollTop;
+    const requestedTop = panel.scrollTop;
 
-    if (entering) {
-      // Start from the section's natural height; restoreScrollPosition will add
-      // only as much height as is needed after the threshold chooser appears.
-      choicePanel.style.minHeight = '';
-    } else {
-      // Returning to the feature list normally makes the section taller again,
-      // so remove any height retained for the compact threshold chooser.
-      choicePanel.style.minHeight = '';
-    }
+    // Start from the section's natural height; restoreScrollPosition will add
+    // only as much height as is needed after the menu changes.
+    choicePanel.style.minHeight = '';
 
-    preserveThroughMenuSwap(panel, choicePanel, targetTop);
+    preserveThroughMenuSwap(
+      panel,
+      choicePanel,
+      requestedTop,
+      Boolean(entering),
+    );
   },
   true,
 );
