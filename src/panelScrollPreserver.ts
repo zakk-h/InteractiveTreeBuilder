@@ -4,38 +4,33 @@ const ENTER_THRESHOLD_SELECTOR = '.feature-summary-card';
 const EXIT_THRESHOLD_SELECTOR = '.back-button';
 const ANCHOR_GAP = 8;
 
-function choicePanelTop(panel: HTMLElement, choicePanel: HTMLElement): number {
+function capturedChoicePanelTop(
+  panel: HTMLElement,
+  choicePanel: HTMLElement,
+  scrollTop: number,
+): number {
   const panelRect = panel.getBoundingClientRect();
   const choiceRect = choicePanel.getBoundingClientRect();
 
-  // Convert the section's current viewport position back into the panel's
-  // scroll coordinate system. This remains correct even if the browser briefly
-  // clamps scrollTop while React swaps a tall feature list for a short chooser.
+  // Capture this before React changes the menu. Once the swap starts, the
+  // browser may clamp scrollTop because the content becomes shorter, so using
+  // post-swap geometry can feed that clamp back into the anchor calculation.
   return Math.max(
     0,
-    panel.scrollTop + choiceRect.top - panelRect.top - ANCHOR_GAP,
+    scrollTop + choiceRect.top - panelRect.top - ANCHOR_GAP,
   );
 }
 
 function restoreScrollPosition(
   panel: HTMLElement,
   choicePanel: HTMLElement,
-  requestedTop: number,
-  keepChoicePanelTopVisible: boolean,
+  targetTop: number,
 ) {
   if (!panel.isConnected || !choicePanel.isConnected) return;
 
-  // Preserve the user's position unless doing so would put the selected
-  // feature's threshold section above the viewport. In that case, move upward
-  // only as far as the top of that section (e.g. "Thresholds for Whole_weight").
-  const targetTop = keepChoicePanelTopVisible
-    ? Math.min(requestedTop, choicePanelTop(panel, choicePanel))
-    : requestedTop;
-
   // A compact threshold/range chooser can be much shorter than the feature
-  // list it replaces. If the whole panel becomes too short, the browser has
-  // no choice but to clamp scrollTop upward. Give only the choice section the
-  // extra height required to keep the desired viewport reachable.
+  // list it replaces. If the whole panel becomes too short to reach targetTop,
+  // extend only this section enough to make that exact scroll position valid.
   const requiredScrollHeight = targetTop + panel.clientHeight;
   const deficit = requiredScrollHeight - panel.scrollHeight;
 
@@ -50,20 +45,11 @@ function restoreScrollPosition(
 function preserveThroughMenuSwap(
   panel: HTMLElement,
   choicePanel: HTMLElement,
-  requestedTop: number,
-  keepChoicePanelTopVisible: boolean,
+  targetTop: number,
 ) {
   const restore = () =>
-    restoreScrollPosition(
-      panel,
-      choicePanel,
-      requestedTop,
-      keepChoicePanelTopVisible,
-    );
+    restoreScrollPosition(panel, choicePanel, targetTop);
 
-  // React updates synchronously from the click, while Framer Motion may adjust
-  // layout for another frame or two. Restore before the next paint and for a
-  // few following frames so neither path can pull the panel somewhere else.
   queueMicrotask(restore);
 
   let frames = 0;
@@ -94,18 +80,22 @@ document.addEventListener(
       return;
     }
 
-    const requestedTop = panel.scrollTop;
+    const currentTop = panel.scrollTop;
 
-    // Start from the section's natural height; restoreScrollPosition will add
-    // only as much height as is needed after the menu changes.
+    // IMPORTANT: compute the anchor while the old feature menu is still fully
+    // present. For entering a threshold chooser, preserve the current position
+    // unless that would leave the top of the choice section above the viewport.
+    const sectionTop = capturedChoicePanelTop(panel, choicePanel, currentTop);
+    const targetTop = entering
+      ? Math.min(currentTop, sectionTop)
+      : currentTop;
+
+    // Clear any height retained by the previous compact chooser only after the
+    // target has been captured. Browser clamping after this point is harmless:
+    // every restore uses the fixed pre-swap targetTop above.
     choicePanel.style.minHeight = '';
 
-    preserveThroughMenuSwap(
-      panel,
-      choicePanel,
-      requestedTop,
-      Boolean(entering),
-    );
+    preserveThroughMenuSwap(panel, choicePanel, targetTop);
   },
   true,
 );
