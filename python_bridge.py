@@ -25,14 +25,14 @@ def _json_safe(x: Any) -> Any:
     return x
 
 
-def write_praxis_builder_payload(
+def write_arborenum_builder_payload(
     model: Any,
     out_dir: str | Path,
     feature_names: Sequence[str] | None = None,
     continuous_groups: Mapping[str, Sequence[int]] | Sequence[Sequence[int]] | None = None,
     thresholds: Mapping[int, Any] | Sequence[Any] | None = None,
     feature_descriptions: Mapping[str, Any] | None = None,
-    filename: str = "praxis_payload.js",
+    filename: str = "arborenum_payload.js",
 ) -> Path:
     graph = model.export_andor_graph(as_dict=True) if hasattr(model, "export_andor_graph") else model
     meta = {
@@ -47,9 +47,9 @@ def write_praxis_builder_payload(
         "meta": _json_safe(meta),
     }
 
-    payload = "window.PRAXIS_BUILDER_PAYLOAD = " + json.dumps(payload_obj) + ";\n"
-    payload += "window.PRAXIS_ANDOR_GRAPH = window.PRAXIS_BUILDER_PAYLOAD.graph;\n"
-    payload += "window.PRAXIS_ANDOR_META = window.PRAXIS_BUILDER_PAYLOAD.meta;\n"
+    payload = "window.ARBORENUM_BUILDER_PAYLOAD = " + json.dumps(payload_obj) + ";\n"
+    payload += "window.ARBORENUM_ANDOR_GRAPH = window.ARBORENUM_BUILDER_PAYLOAD.graph;\n"
+    payload += "window.ARBORENUM_ANDOR_META = window.ARBORENUM_BUILDER_PAYLOAD.meta;\n"
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
