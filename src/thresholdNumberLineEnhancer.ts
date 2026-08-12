@@ -13,6 +13,21 @@ type CurrentPayload = {
   };
 };
 
+type NativeSplitCard = {
+  feature: number;
+  splitId: number;
+  objective?: string;
+  card: HTMLElement;
+};
+
+type AvailableCut = RegistryEntry & NativeSplitCard;
+
+type AvailableInterval = {
+  startIndex: number;
+  endIndex: number;
+  cuts: AvailableCut[];
+};
+
 declare global {
   interface Window {
     ARBORENUM_CURRENT_BUILDER_PAYLOAD?: CurrentPayload;
@@ -21,10 +36,10 @@ declare global {
   }
 }
 
-const STYLE_ID = 'arborenum-threshold-line-style';
-const ENHANCER_CLASS = 'threshold-line-enhancer';
+const STYLE_ID = 'arborenum-threshold-interval-style';
+const ENHANCER_CLASS = 'threshold-interval-enhancer';
 const HIDDEN_CLASS = 'threshold-native-hidden';
-const MIN_NUMBER_LINE_CHOICES = 11;
+const MIN_INTERVAL_PICKER_CHOICES = 11;
 
 function currentPayload(): CurrentPayload | undefined {
   return (
@@ -57,6 +72,14 @@ function registry(): RegistryEntry[] {
     );
 }
 
+function formatThreshold(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  return value
+    .toFixed(6)
+    .replace(/0+$/, '')
+    .replace(/\.$/, '');
+}
+
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
 
@@ -67,242 +90,246 @@ function injectStyles() {
       display: none !important;
     }
 
-    .threshold-line-enhancer {
-      margin-top: 10px;
-      padding: 14px 13px 13px;
-      border: 1px solid #dbe4ee;
-      border-radius: 16px;
-      background: #ffffff;
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.045);
+    .threshold-interval-enhancer {
+      margin-top: 8px;
       color: #102033;
     }
 
-    .threshold-line-legend {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 14px;
-      margin-bottom: 10px;
-      color: #526277;
-      font-size: 11px;
-      font-weight: 800;
-    }
-
-    .threshold-line-legend > span {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .threshold-line-swatch {
-      width: 18px;
-      height: 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(15, 23, 42, 0.18);
-    }
-
-    .threshold-line-swatch.feasible {
-      background: #0072b2;
-    }
-
-    .threshold-line-swatch.blocked {
-      background: repeating-linear-gradient(
-        135deg,
-        #d55e00 0,
-        #d55e00 4px,
-        #ffffff 4px,
-        #ffffff 7px
-      );
-    }
-
-    .threshold-line-track {
-      position: relative;
-      display: block;
-      width: 100%;
-      height: 46px;
-      padding: 0 7px;
-      border: 0;
-      background: transparent;
-      cursor: crosshair;
-    }
-
-    .threshold-line-axis {
-      position: absolute;
-      left: 7px;
-      right: 7px;
-      top: 19px;
-      height: 8px;
-      border-radius: 999px;
-      background: #d8e1eb;
-      overflow: hidden;
-    }
-
-    .threshold-line-segment {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      min-width: 1px;
-    }
-
-    .threshold-line-segment.feasible {
-      background: #0072b2;
-    }
-
-    .threshold-line-segment.blocked {
-      background: repeating-linear-gradient(
-        135deg,
-        #d55e00 0,
-        #d55e00 5px,
-        #ffffff 5px,
-        #ffffff 8px
-      );
-    }
-
-    .threshold-line-tick {
-      position: absolute;
-      top: 14px;
-      width: 14px;
-      height: 14px;
-      margin-left: -7px;
-      border: 2px solid #ffffff;
-      box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.28);
-      pointer-events: none;
-      z-index: 2;
-    }
-
-    .threshold-line-tick.feasible {
-      border-radius: 999px;
-      background: #0072b2;
-    }
-
-    .threshold-line-tick.blocked {
-      border-radius: 2px;
-      background: #d55e00;
-      transform: rotate(45deg);
-    }
-
-    .threshold-line-selected {
-      position: absolute;
-      top: 8px;
-      width: 2px;
-      height: 26px;
-      margin-left: -1px;
-      background: #111827;
-      pointer-events: none;
-      z-index: 3;
-    }
-
-    .threshold-line-labels {
-      display: flex;
-      justify-content: space-between;
-      margin-top: -3px;
+    .threshold-interval-intro {
+      margin: 0 0 10px;
       color: #64748b;
-      font-size: 11px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .threshold-interval-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .threshold-interval-button {
+      width: 100%;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 12px;
+      border: 1px solid #b9d7ee;
+      border-left: 5px solid #0072b2;
+      border-radius: 13px;
+      background: #f8fcff;
+      color: #102033;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+    }
+
+    .threshold-interval-button:hover {
+      background: #eef8ff;
+      border-color: #7eb7dc;
+      transform: translateY(-1px);
+    }
+
+    .threshold-interval-range {
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 900;
       font-variant-numeric: tabular-nums;
     }
 
-    .threshold-line-manual {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
-      align-items: end;
-      margin-top: 12px;
+    .threshold-interval-sub {
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 10px;
+      font-weight: 700;
     }
 
-    .threshold-line-manual label {
-      display: grid;
-      gap: 5px;
-      color: #526277;
+    .threshold-interval-count {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #e6f4fc;
+      color: #005f94;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 900;
+      white-space: nowrap;
     }
 
-    .threshold-line-manual input {
-      width: 100%;
+    .threshold-interval-empty {
+      padding: 12px;
+      border: 1px solid #dbe4ee;
+      border-radius: 12px;
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .threshold-interval-detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .threshold-interval-detail-copy {
       min-width: 0;
-      height: 38px;
-      border: 1px solid #d8e1eb;
-      border-radius: 10px;
+    }
+
+    .threshold-interval-detail-title {
+      font-size: 14px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .threshold-interval-detail-sub {
+      margin-top: 3px;
+      color: #64748b;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .threshold-interval-back {
+      flex: 0 0 auto;
+      min-height: 31px;
       padding: 0 10px;
-      color: #102033;
-      background: #ffffff;
-      outline: none;
-    }
-
-    .threshold-line-manual input:focus {
-      border-color: #0072b2;
-      box-shadow: 0 0 0 3px rgba(0, 114, 178, 0.12);
-    }
-
-    .threshold-line-use {
-      min-height: 38px;
-      border: 1px solid #00679f;
+      border: 1px solid #bfdbfe;
       border-radius: 10px;
-      padding: 0 12px;
-      color: #ffffff;
-      background: #0072b2;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 11px;
       font-weight: 850;
       cursor: pointer;
     }
 
-    .threshold-line-use:disabled {
-      cursor: not-allowed;
+    .threshold-cut-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .threshold-cut-button {
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid #dbe4ee;
+      border-radius: 11px;
+      background: #ffffff;
+      color: #102033;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+    }
+
+    .threshold-cut-button:hover {
+      background: #f1f8fd;
+      border-color: #7eb7dc;
+      transform: translateY(-1px);
+    }
+
+    .threshold-cut-value {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #005f94;
+      font-size: 13px;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .threshold-cut-meta {
+      display: block;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: #64748b;
-      background: #f1f5f9;
-      border-color: #d8e1eb;
-    }
-
-    .threshold-line-message {
-      margin-top: 9px;
-      min-height: 30px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      color: #315f72;
-      background: #eef8fc;
-      border: 1px solid #b9dfeb;
-      font-size: 11px;
-      line-height: 1.35;
-      font-weight: 750;
-    }
-
-    .threshold-line-message.blocked {
-      color: #8b4513;
-      background: #fff5eb;
-      border-color: #f2c49e;
-    }
-
-    .threshold-line-help {
-      margin-top: 7px;
-      color: #64748b;
-      font-size: 10px;
-      line-height: 1.35;
+      font-size: 9px;
+      font-weight: 700;
     }
   `;
 
   document.head.appendChild(style);
 }
 
-function parseFeatureAndSplit(card: Element) {
+function parseFeatureAndSplit(card: Element): NativeSplitCard | undefined {
   const sub = card.querySelector('.choice-card-sub')?.textContent ?? '';
   const featureMatch = sub.match(/feature\s+(\d+)/i);
   const splitMatch = sub.match(/split\s+#\s*(\d+)/i);
+  const objectiveMatch = sub.match(/obj\s+([^·]+)/i);
 
   if (!featureMatch || !splitMatch) return undefined;
 
   return {
     feature: Number(featureMatch[1]),
     splitId: Number(splitMatch[1]),
+    objective: objectiveMatch?.[1]?.trim(),
     card: card as HTMLElement,
   };
 }
 
-function restoreNativeControls() {
-  document
+function restoreNativeControls(panel?: Element) {
+  const root = panel ?? document;
+
+  root
     .querySelectorAll(`.${HIDDEN_CLASS}`)
     .forEach((element) => element.classList.remove(HIDDEN_CLASS));
 
-  document
+  root
     .querySelectorAll(`.${ENHANCER_CLASS}`)
     .forEach((element) => element.remove());
+}
+
+function contiguousAvailableIntervals(
+  candidates: RegistryEntry[],
+  availableByFeature: Map<number, NativeSplitCard>,
+): AvailableInterval[] {
+  const intervals: AvailableInterval[] = [];
+  let current: AvailableInterval | undefined;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    const native = availableByFeature.get(candidate.internalFeature);
+
+    if (!native) {
+      if (current) {
+        intervals.push(current);
+        current = undefined;
+      }
+      continue;
+    }
+
+    const cut: AvailableCut = {
+      ...candidate,
+      ...native,
+    };
+
+    if (!current) {
+      current = {
+        startIndex: i,
+        endIndex: i,
+        cuts: [cut],
+      };
+      continue;
+    }
+
+    current.endIndex = i;
+    current.cuts.push(cut);
+  }
+
+  if (current) intervals.push(current);
+  return intervals;
+}
+
+function fireNativeSplit(card: HTMLElement) {
+  card.dispatchEvent(
+    new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+    }),
+  );
 }
 
 function enhanceThresholdPanel() {
@@ -310,8 +337,9 @@ function enhanceThresholdPanel() {
   if (!panel) return;
 
   const sectionTitle = panel.querySelector('.section-title')?.textContent?.trim() ?? '';
+
   if (!sectionTitle.startsWith('Thresholds for ')) {
-    restoreNativeControls();
+    restoreNativeControls(panel);
     return;
   }
 
@@ -323,16 +351,20 @@ function enhanceThresholdPanel() {
   const countMatch = countText.match(/(\d+)\s+choices/i);
   const totalChoices = countMatch ? Number(countMatch[1]) : 0;
 
-  if (totalChoices < MIN_NUMBER_LINE_CHOICES) {
-    restoreNativeControls();
+  if (totalChoices < MIN_INTERVAL_PICKER_CHOICES) {
+    restoreNativeControls(panel);
     return;
   }
 
   const availableCards = Array.from(grid.querySelectorAll('.choice-card.split-choice'))
     .map(parseFeatureAndSplit)
-    .filter((x): x is NonNullable<typeof x> => !!x);
+    .filter((x): x is NativeSplitCard => !!x);
 
-  if (availableCards.length === 0) return;
+  if (availableCards.length === 0) {
+    grid.classList.add(HIDDEN_CLASS);
+    panel.querySelector('.search-box')?.classList.add(HIDDEN_CLASS);
+    return;
+  }
 
   const entries = registry();
   const firstRegistryEntry = entries.find(
@@ -347,17 +379,24 @@ function enhanceThresholdPanel() {
         entry.continuousGroup === firstRegistryEntry.continuousGroup &&
         entry.originalFeature === firstRegistryEntry.originalFeature,
     )
-    .sort((a, b) => a.threshold - b.threshold || a.internalFeature - b.internalFeature);
+    .sort(
+      (a, b) =>
+        a.internalFeature - b.internalFeature ||
+        a.threshold - b.threshold,
+    );
 
-  if (candidates.length < MIN_NUMBER_LINE_CHOICES) return;
+  if (candidates.length < MIN_INTERVAL_PICKER_CHOICES) return;
 
   const availableByFeature = new Map(
     availableCards.map((entry) => [entry.feature, entry]),
   );
 
-  const signature = `${sectionTitle}|${totalChoices}|${candidates
-    .map((entry) => `${entry.internalFeature}:${entry.threshold}`)
-    .join(',')}|${availableCards.map((entry) => entry.feature).join(',')}`;
+  const intervals = contiguousAvailableIntervals(candidates, availableByFeature);
+
+  const signature = `${sectionTitle}|${totalChoices}|${availableCards
+    .map((entry) => entry.feature)
+    .sort((a, b) => a - b)
+    .join(',')}`;
 
   const existing = panel.querySelector<HTMLElement>(`.${ENHANCER_CLASS}`);
   if (existing?.dataset.signature === signature) return;
@@ -365,236 +404,155 @@ function enhanceThresholdPanel() {
   existing?.remove();
   injectStyles();
 
+  // Dense continuous features are owned entirely by this interval picker.
+  // Keeping the native grid hidden from the first observer callback prevents
+  // the old 5-10 style threshold list from flashing before this UI appears.
   grid.classList.add(HIDDEN_CLASS);
   panel.querySelector('.search-box')?.classList.add(HIDDEN_CLASS);
 
   const wrapper = document.createElement('div');
   wrapper.className = ENHANCER_CLASS;
   wrapper.dataset.signature = signature;
-
-  const legend = document.createElement('div');
-  legend.className = 'threshold-line-legend';
-  legend.innerHTML = `
-    <span><i class="threshold-line-swatch feasible"></i>available now</span>
-    <span><i class="threshold-line-swatch blocked"></i>not available within the current budget/continuation</span>
-  `;
-  wrapper.appendChild(legend);
-
-  const track = document.createElement('button');
-  track.type = 'button';
-  track.className = 'threshold-line-track';
-  track.title = 'Click anywhere to use the represented cut immediately below that value.';
-
-  const axis = document.createElement('span');
-  axis.className = 'threshold-line-axis';
-  track.appendChild(axis);
-
-  const minValue = candidates[0].threshold;
-  const maxValue = candidates[candidates.length - 1].threshold;
-  const span = Math.max(maxValue - minValue, Number.EPSILON);
-
-  const pct = (value: number) => (100 * (value - minValue)) / span;
-
-  for (let i = 0; i < candidates.length - 1; i += 1) {
-    const current = candidates[i];
-    const next = candidates[i + 1];
-    const segment = document.createElement('span');
-    segment.className = `threshold-line-segment ${
-      availableByFeature.has(current.internalFeature) ? 'feasible' : 'blocked'
-    }`;
-    segment.style.left = `${pct(current.threshold)}%`;
-    segment.style.width = `${Math.max(0, pct(next.threshold) - pct(current.threshold))}%`;
-    axis.appendChild(segment);
-  }
-
-  for (const candidate of candidates) {
-    const tick = document.createElement('span');
-    const available = availableByFeature.has(candidate.internalFeature);
-    tick.className = `threshold-line-tick ${available ? 'feasible' : 'blocked'}`;
-    tick.style.left = `calc(7px + (100% - 14px) * ${pct(candidate.threshold) / 100})`;
-    tick.title = `${candidate.originalName} ≤ ${candidate.threshold} · ${
-      available ? 'available now' : 'not available now'
-    }`;
-    track.appendChild(tick);
-  }
-
-  const selectedMarker = document.createElement('span');
-  selectedMarker.className = 'threshold-line-selected';
-  selectedMarker.hidden = true;
-  track.appendChild(selectedMarker);
-
-  wrapper.appendChild(track);
-
-  const labels = document.createElement('div');
-  labels.className = 'threshold-line-labels';
-  labels.innerHTML = `<span>${minValue}</span><span>${maxValue}</span>`;
-  wrapper.appendChild(labels);
-
-  const manual = document.createElement('div');
-  manual.className = 'threshold-line-manual';
-
-  const inputLabel = document.createElement('label');
-  const labelText = document.createElement('span');
-  labelText.textContent = 'Split value';
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.step = 'any';
-  input.placeholder = String((minValue + maxValue) / 2);
-  inputLabel.append(labelText, input);
-
-  const useButton = document.createElement('button');
-  useButton.type = 'button';
-  useButton.className = 'threshold-line-use';
-  useButton.textContent = 'Use split';
-  useButton.disabled = true;
-
-  manual.append(inputLabel, useButton);
-  wrapper.appendChild(manual);
-
-  const message = document.createElement('div');
-  message.className = 'threshold-line-message';
-  message.setAttribute('aria-live', 'polite');
-  message.textContent = 'Click the number line or type a value.';
-  wrapper.appendChild(message);
-
-  const help = document.createElement('div');
-  help.className = 'threshold-line-help';
-  help.textContent =
-    'Values between represented cutpoints snap to the cut immediately below them, which gives the same split over the represented training cutpoints.';
-  wrapper.appendChild(help);
-
   grid.before(wrapper);
 
-  let selected:
-    | {
-        candidate: RegistryEntry;
-        card?: HTMLElement;
-      }
-    | undefined;
+  const renderIntervals = () => {
+    wrapper.replaceChildren();
 
-  function lowerCandidate(value: number) {
-    let lo = 0;
-    let hi = candidates.length - 1;
-    let best = -1;
+    const intro = document.createElement('p');
+    intro.className = 'threshold-interval-intro';
+    intro.textContent =
+      intervals.length === 1
+        ? 'The available cuts form one contiguous threshold range. Choose the range to see its cutpoints.'
+        : `The available cuts form ${intervals.length} contiguous threshold ranges. Choose a range to see its cutpoints.`;
+    wrapper.appendChild(intro);
 
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      if (candidates[mid].threshold <= value) {
-        best = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-
-    return best >= 0 ? candidates[best] : undefined;
-  }
-
-  function selectValue(value: number, applyImmediately: boolean) {
-    if (!Number.isFinite(value)) {
-      selected = undefined;
-      selectedMarker.hidden = true;
-      useButton.disabled = true;
-      message.className = 'threshold-line-message';
-      message.textContent = 'Enter a numeric threshold value.';
+    if (intervals.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'threshold-interval-empty';
+      empty.textContent = 'No cuts for this feature are available under the current partial tree.';
+      wrapper.appendChild(empty);
       return;
     }
 
-    if (value < minValue || value > maxValue) {
-      selected = undefined;
-      selectedMarker.hidden = true;
-      useButton.disabled = true;
-      message.className = 'threshold-line-message';
-      message.textContent = `Enter a value from ${minValue} to ${maxValue}.`;
-      return;
+    const list = document.createElement('div');
+    list.className = 'threshold-interval-list';
+
+    intervals.forEach((interval, intervalIndex) => {
+      const first = interval.cuts[0];
+      const last = interval.cuts[interval.cuts.length - 1];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'threshold-interval-button';
+
+      const copy = document.createElement('div');
+      const range = document.createElement('div');
+      range.className = 'threshold-interval-range';
+      range.textContent =
+        interval.cuts.length === 1
+          ? `≤ ${formatThreshold(first.threshold)}`
+          : `${formatThreshold(first.threshold)} – ${formatThreshold(last.threshold)}`;
+
+      const sub = document.createElement('div');
+      sub.className = 'threshold-interval-sub';
+      sub.textContent =
+        interval.cuts.length === 1
+          ? '1 available cutpoint'
+          : `${interval.cuts.length} consecutive available cutpoints`;
+
+      copy.append(range, sub);
+
+      const count = document.createElement('span');
+      count.className = 'threshold-interval-count';
+      count.textContent = `${interval.cuts.length}`;
+
+      button.append(copy, count);
+      button.addEventListener('click', () => renderIntervalDetail(interval, intervalIndex));
+      list.appendChild(button);
+    });
+
+    wrapper.appendChild(list);
+  };
+
+  const renderIntervalDetail = (interval: AvailableInterval, intervalIndex: number) => {
+    wrapper.replaceChildren();
+
+    const first = interval.cuts[0];
+    const last = interval.cuts[interval.cuts.length - 1];
+
+    const head = document.createElement('div');
+    head.className = 'threshold-interval-detail-head';
+
+    const copy = document.createElement('div');
+    copy.className = 'threshold-interval-detail-copy';
+
+    const title = document.createElement('div');
+    title.className = 'threshold-interval-detail-title';
+    title.textContent =
+      interval.cuts.length === 1
+        ? `Cut at ${formatThreshold(first.threshold)}`
+        : `${formatThreshold(first.threshold)} – ${formatThreshold(last.threshold)}`;
+
+    const sub = document.createElement('div');
+    sub.className = 'threshold-interval-detail-sub';
+    sub.textContent = `${interval.cuts.length} available cutpoint${
+      interval.cuts.length === 1 ? '' : 's'
+    } in range ${intervalIndex + 1} of ${intervals.length}`;
+
+    copy.append(title, sub);
+
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'threshold-interval-back';
+    back.textContent = '← Ranges';
+    back.addEventListener('click', renderIntervals);
+
+    head.append(copy, back);
+    wrapper.appendChild(head);
+
+    const cutGrid = document.createElement('div');
+    cutGrid.className = 'threshold-cut-grid';
+
+    for (const cut of interval.cuts) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'threshold-cut-button';
+      button.title = `${cut.originalName} ≤ ${cut.threshold}`;
+
+      const value = document.createElement('span');
+      value.className = 'threshold-cut-value';
+      value.textContent = `≤ ${formatThreshold(cut.threshold)}`;
+
+      const meta = document.createElement('span');
+      meta.className = 'threshold-cut-meta';
+      meta.textContent = cut.objective
+        ? `objective ${cut.objective}`
+        : `split #${cut.splitId}`;
+
+      button.append(value, meta);
+      button.addEventListener('click', () => fireNativeSplit(cut.card));
+      cutGrid.appendChild(button);
     }
 
-    const candidate = lowerCandidate(value);
-    if (!candidate) return;
+    wrapper.appendChild(cutGrid);
+  };
 
-    const available = availableByFeature.get(candidate.internalFeature);
-    selected = { candidate, card: available?.card };
-
-    selectedMarker.hidden = false;
-    selectedMarker.style.left = `calc(7px + (100% - 14px) * ${pct(candidate.threshold) / 100})`;
-
-    const exact = Math.abs(value - candidate.threshold) <=
-      Math.max(1, Math.abs(candidate.threshold)) * 1e-12;
-    const snapText = exact
-      ? `Cut ${candidate.threshold}`
-      : `Snaps down to cut ${candidate.threshold}`;
-
-    if (!available) {
-      useButton.disabled = true;
-      useButton.textContent = 'Not available';
-      message.className = 'threshold-line-message blocked';
-      message.textContent = `${snapText}, but that cut cannot be selected in the current budget/continuation.`;
-      return;
-    }
-
-    useButton.disabled = false;
-    useButton.textContent = 'Use split';
-    message.className = 'threshold-line-message';
-    message.textContent = `${snapText} · available now.`;
-
-    if (applyImmediately) {
-      available.card.click();
-    }
-  }
-
-  track.addEventListener('click', (event) => {
-    const rect = track.getBoundingClientRect();
-    const x = Math.min(rect.right - 7, Math.max(rect.left + 7, event.clientX));
-    const ratio = (x - (rect.left + 7)) / Math.max(1, rect.width - 14);
-    const value = minValue + ratio * (maxValue - minValue);
-    input.value = String(value);
-    selectValue(value, true);
-  });
-
-  input.addEventListener('input', () => {
-    if (input.value.trim() === '') {
-      selected = undefined;
-      selectedMarker.hidden = true;
-      useButton.disabled = true;
-      useButton.textContent = 'Use split';
-      message.className = 'threshold-line-message';
-      message.textContent = 'Click the number line or type a value.';
-      return;
-    }
-
-    selectValue(Number(input.value), false);
-  });
-
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && selected?.card) {
-      selected.card.click();
-    }
-  });
-
-  useButton.addEventListener('click', () => {
-    selected?.card?.click();
-  });
+  renderIntervals();
 }
 
-let scheduled = false;
-function scheduleEnhance() {
-  if (scheduled) return;
-  scheduled = true;
+injectStyles();
 
-  requestAnimationFrame(() => {
-    scheduled = false;
-    enhanceThresholdPanel();
-  });
-}
+// This observer is installed before main.tsx. React commits the expanded
+// threshold panel synchronously; MutationObserver runs before the browser's
+// next paint, so dense (>10) features are hidden/replaced without flashing the
+// native threshold-card list first.
+const observer = new MutationObserver(() => {
+  enhanceThresholdPanel();
+});
 
-const observer = new MutationObserver(scheduleEnhance);
 observer.observe(document.documentElement, {
   childList: true,
   subtree: true,
   characterData: true,
 });
 
-window.addEventListener('load', scheduleEnhance);
-scheduleEnhance();
-
-export {};
+enhanceThresholdPanel();
