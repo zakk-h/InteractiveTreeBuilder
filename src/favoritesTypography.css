@@ -91,3 +91,69 @@
 .starred-gallery-close {
   font-size: 22px !important;
 }
+
+/* Keep all six header controls on one shared 3-column grid. */
+.header-actions {
+  width: 480px !important;
+  max-width: 42% !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  align-items: stretch !important;
+}
+
+#arborenum-header-tree-actions {
+  display: contents !important;
+}
+
+.header-actions > .settings-wrap,
+.header-actions > .upload-button,
+.header-actions > .status,
+#arborenum-header-tree-actions > .ghost-button {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.header-actions > .settings-wrap > .ghost-button {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.header-actions .ghost-button,
+.header-actions .status {
+  min-height: 38px;
+}
+
+.header-actions .status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+}
+
+#arborenum-header-tree-actions > .ghost-button {
+  white-space: nowrap;
+}
+
+/* The injected buttons begin empty; give them first-paint labels until JS syncs state. */
+.favorite-star-button:empty::before {
+  content: '☆ Star';
+}
+
+.favorite-open-button:empty::before {
+  content: '★ Favorites';
+}
+
+.favorite-open-button:empty::after {
+  content: '0';
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff4cf;
+  color: #8b5d00;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+}
