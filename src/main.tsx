@@ -980,7 +980,7 @@ function SidePanel({
           <Sparkles size={19} />
         </div>
         <div>
-          <div className="brand-title">ArborEnum Tree Builder</div>
+          <div className="brand-title">Interactive Tree Builder</div>
           <div className="brand-subtitle">Guaranteed Rashomon membership</div>
         </div>
       </div>
@@ -1056,7 +1056,7 @@ function SidePanel({
         <button
           className="ghost-button"
           onClick={() =>
-            downloadJson('arborenum-built-tree.json', {
+            downloadJson('interactive-tree.json', {
               complete: isComplete(snapshot.root),
               objective_lower_bound: currentLower,
               normalized_objective_lower_bound: normalizedObjective(
@@ -1762,7 +1762,7 @@ function App() {
 
   const [graph, setGraph] = useState<AndOrGraph>(initialGraph);
   const [meta, setMeta] = useState<FeatureMeta & Record<string, unknown>>(initialMeta);
-  const [payloadName, setPayloadName] = useState<string>('embedded ArborEnum graph');
+  const [payloadName, setPayloadName] = useState<string>('embedded Rashomon graph');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [thresholdDecimals, setThresholdDecimals] = useState(3);
   const [ui, setUi] = useState<BuilderUi>(() => makeDefaultUi());
@@ -1797,7 +1797,6 @@ function App() {
   const pushHistory = () => {
     setHistory((h) => [...h, cloneSnapshot(snapshot)]);
   };
-
   const setWithHistory = (next: HistorySnapshot) => {
     if (next === snapshot) return;
 
@@ -1817,11 +1816,11 @@ function App() {
       <div className="canvas-card">
         <div className="canvas-header">
           <div>
-            <h1>Interactive Rashomon Tree Builder</h1>
+            <h1>Interactive Tree Builder</h1>
             <p>
               Choose from splits that preserve near-optimality.
             </p>
-            <p className="payload-name">Loaded: {payloadName}</p>
+            <p className="payload-name">Loaded {payloadName}</p>
             {uploadError && <p className="upload-error">{uploadError}</p>}
           </div>
 
