@@ -11,6 +11,7 @@ type TreeCounts = {
 const internalWindow = window as Window & Record<string, unknown>;
 
 let baselineTreeCounts: TreeCounts | null = null;
+let cachedTrainingSamples: string | null = null;
 let lastPayloadLabel = '';
 let scheduledFrame: number | null = null;
 
@@ -112,9 +113,21 @@ function simplifyTopMetrics(panel: Element, hasPartialTree: boolean) {
   );
   setText(boundMetric.querySelector('span'), 'Rashomon Bound');
 
-  const trainingSamples = featuresMetric.querySelector('b')?.textContent?.trim();
-  if (trainingSamples) {
-    setText(samplesMetric.querySelector('b'), trainingSamples);
+  // main.tsx originally renders Training Samples in the fourth metric card.
+  // Capture that value once before repurposing the card for Number of Features.
+  // Do not reread it on later MutationObserver passes, because by then that
+  // card contains the feature count rather than the sample count.
+  if (cachedTrainingSamples === null) {
+    const originalFourthLabel = featuresMetric.querySelector('span')?.textContent?.trim();
+    const originalFourthValue = featuresMetric.querySelector('b')?.textContent?.trim();
+
+    if (originalFourthLabel?.toLowerCase() === 'training samples' && originalFourthValue) {
+      cachedTrainingSamples = originalFourthValue;
+    }
+  }
+
+  if (cachedTrainingSamples !== null) {
+    setText(samplesMetric.querySelector('b'), cachedTrainingSamples);
   }
   setText(samplesMetric.querySelector('span'), 'Training Samples');
 
@@ -161,6 +174,7 @@ function applyPanelSimplifications() {
   if (payloadLabel !== lastPayloadLabel) {
     lastPayloadLabel = payloadLabel;
     baselineTreeCounts = null;
+    cachedTrainingSamples = null;
   }
 
   const counts = currentTreeCounts();
