@@ -10,7 +10,6 @@ type TreeCounts = {
 
 const internalWindow = window as Window & Record<string, unknown>;
 
-let baselineTreeCounts: TreeCounts | null = null;
 let cachedTrainingSamples: string | null = null;
 let lastPayloadLabel = '';
 let scheduledFrame: number | null = null;
@@ -19,10 +18,6 @@ function setText(element: Element | null | undefined, text: string) {
   if (element && element.textContent !== text) {
     element.textContent = text;
   }
-}
-
-function sameTreeCounts(a: TreeCounts, b: TreeCounts): boolean {
-  return a.split === b.split && a.leaf === b.leaf && a.choice === b.choice;
 }
 
 function currentTreeCounts(): TreeCounts | null {
@@ -101,7 +96,7 @@ function hideRemainingChoicesSection(panel: Element) {
   }
 }
 
-function simplifyTopMetrics(panel: Element, hasPartialTree: boolean) {
+function simplifyTopMetrics(panel: Element, treeComplete: boolean) {
   const metrics = Array.from(panel.querySelectorAll<HTMLElement>('.metric-grid .metric'));
   if (metrics.length < 4) return;
 
@@ -109,7 +104,7 @@ function simplifyTopMetrics(panel: Element, hasPartialTree: boolean) {
 
   setText(
     optimalMetric.querySelector('span'),
-    hasPartialTree ? 'Optimal Completion of Partial Tree' : 'Optimal Tree',
+    treeComplete ? 'Completed Tree Objective' : 'Optimal Completion of Partial Tree',
   );
   setText(boundMetric.querySelector('span'), 'Rashomon Bound');
 
@@ -173,21 +168,14 @@ function applyPanelSimplifications() {
   const payloadLabel = document.querySelector('.payload-name')?.textContent?.trim() ?? '';
   if (payloadLabel !== lastPayloadLabel) {
     lastPayloadLabel = payloadLabel;
-    baselineTreeCounts = null;
     cachedTrainingSamples = null;
   }
 
   const counts = currentTreeCounts();
-  if (counts && baselineTreeCounts === null) {
-    baselineTreeCounts = counts;
-  }
-
-  const hasPartialTree = Boolean(
-    counts && baselineTreeCounts && !sameTreeCounts(counts, baselineTreeCounts),
-  );
+  const treeComplete = counts?.choice === 0;
 
   hideRemainingChoicesSection(panel);
-  simplifyTopMetrics(panel, hasPartialTree);
+  simplifyTopMetrics(panel, treeComplete);
   simplifySlackCard(panel);
   simplifyChoiceBudget(panel);
 }
