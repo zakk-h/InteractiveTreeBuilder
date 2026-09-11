@@ -212,7 +212,13 @@ export function formatObjective(graph: AndOrGraph, value: number): string {
   return normalizedObjective(graph, value).toFixed(4).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
-export function applySplit(snapshot: HistorySnapshot, graph: AndOrGraph, uid: number, splitId: number): HistorySnapshot {
+export function applySplit(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  uid: number,
+  splitId: number,
+  autoExpandWithinUid?: number,
+): HistorySnapshot {
   const feasible = annotateChoicesFor(graph, snapshot, uid).some(
     (x) => x.feasible && x.choice.kind === 'split' && x.choice.split.id === splitId
   );
@@ -235,10 +241,16 @@ export function applySplit(snapshot: HistorySnapshot, graph: AndOrGraph, uid: nu
   node.right = right;
   next.activeUid = left.uid;
 
-  return autoExpandSingletons(next, graph);
+  return autoExpandSingletons(next, graph, autoExpandWithinUid);
 }
 
-export function applyLeaf(snapshot: HistorySnapshot, graph: AndOrGraph, uid: number, leafId: number): HistorySnapshot {
+export function applyLeaf(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  uid: number,
+  leafId: number,
+  autoExpandWithinUid?: number,
+): HistorySnapshot {
   const feasible = annotateChoicesFor(graph, snapshot, uid).some(
     (x) => x.feasible && x.choice.kind === 'leaf' && x.choice.leaf.id === leafId
   );
@@ -260,7 +272,7 @@ export function applyLeaf(snapshot: HistorySnapshot, graph: AndOrGraph, uid: num
   const unresolved = unresolvedNodes(next.root);
   next.activeUid = unresolved[0]?.uid ?? node.uid;
 
-  return autoExpandSingletons(next, graph);
+  return autoExpandSingletons(next, graph, autoExpandWithinUid);
 }
 
 export function rewind(snapshot: HistorySnapshot, uid: number): HistorySnapshot {
@@ -279,11 +291,18 @@ export function rewind(snapshot: HistorySnapshot, uid: number): HistorySnapshot 
   return next;
 }
 
-export function autoExpandSingletons(snapshot: HistorySnapshot, graph: AndOrGraph): HistorySnapshot {
+export function autoExpandSingletons(
+  snapshot: HistorySnapshot,
+  graph: AndOrGraph,
+  withinUid?: number,
+): HistorySnapshot {
   let cur = snapshot;
 
   while (true) {
-    const singleton = unresolvedNodes(cur.root).find((node) => {
+    const scopeRoot = withinUid === undefined ? cur.root : findNode(cur.root, withinUid);
+    if (!scopeRoot) return cur;
+
+    const singleton = unresolvedNodes(scopeRoot).find((node) => {
       const feasibleChoices = annotateChoicesFor(graph, cur, node.uid).filter((x) => x.feasible);
       return feasibleChoices.length === 1;
     });
@@ -336,11 +355,15 @@ export function randomComplete(
   snapshot: HistorySnapshot,
   graph: AndOrGraph,
   rng: () => number = Math.random,
+  targetUid: number = snapshot.activeUid,
 ): HistorySnapshot {
-  let cur = autoExpandSingletons(cloneTree(snapshot), graph);
+  let cur = autoExpandSingletons(cloneTree(snapshot), graph, targetUid);
 
-  while (!isComplete(cur.root)) {
-    const node = unresolvedNodes(cur.root)[0];
+  while (true) {
+    const target = findNode(cur.root, targetUid);
+    if (!target) return cur;
+
+    const node = unresolvedNodes(target)[0];
     if (!node) break;
 
     const feasibleChoices = annotateChoicesFor(graph, cur, node.uid).filter((x) => x.feasible);
@@ -353,9 +376,9 @@ export function randomComplete(
     const chosen = feasibleChoices[ix].choice;
 
     if (chosen.kind === 'leaf') {
-      cur = applyLeaf(cur, graph, node.uid, chosen.leaf.id);
+      cur = applyLeaf(cur, graph, node.uid, chosen.leaf.id, targetUid);
     } else {
-      cur = applySplit(cur, graph, node.uid, chosen.split.id);
+      cur = applySplit(cur, graph, node.uid, chosen.split.id, targetUid);
     }
   }
 
@@ -588,6 +611,7 @@ function fillFrontierFromPlans(
   snapshot: HistorySnapshot,
   graph: AndOrGraph,
   plans: Map<number, CompletionPlan>,
+  targetUid: number,
 ): HistorySnapshot | undefined {
   const next = cloneTree(snapshot);
   const nextUid = { value: next.nextUid };
@@ -602,7 +626,8 @@ function fillFrontierFromPlans(
   }
 
   next.nextUid = nextUid.value;
-  next.activeUid = next.root.uid;
+  const unresolved = unresolvedNodes(next.root);
+  next.activeUid = unresolved[0]?.uid ?? targetUid;
   return next;
 }
 
@@ -614,33 +639,46 @@ function constrainedAvoidComplete(
   snapshot: HistorySnapshot,
   graph: AndOrGraph,
   forbiddenFeatures: number[],
+  targetUid: number,
 ): HistorySnapshot {
+  const scopeRoot = findNode(snapshot.root, targetUid);
+  if (!scopeRoot) {
+    setConstraintResult(false, 'The selected subtree could not be found.');
+    return snapshot;
+  }
+
+  const frontier = unresolvedNodes(scopeRoot);
+  if (frontier.length === 0) {
+    setConstraintResult(false, 'The selected subtree has no unfinished choices to complete.');
+    return snapshot;
+  }
+
   const forbidden = new Set(forbiddenFeatures.map(Number));
 
-  const alreadyUsed = walk(snapshot.root).find(
+  const alreadyUsed = walk(scopeRoot).find(
     (node) => node.kind === 'split' && node.feature !== undefined && forbidden.has(node.feature),
   );
 
   if (alreadyUsed) {
     setConstraintResult(
       false,
-      'A selected feature is already used in the partial tree. Rewind that split first if the final tree must avoid it.',
+      'A selected feature is already used in the selected subtree. Rewind that split first if this subtree must avoid it.',
     );
     return snapshot;
   }
 
   const plans = new Map<number, CompletionPlan>();
 
-  for (const node of unresolvedNodes(snapshot.root)) {
+  for (const node of frontier) {
     const plan = bestAvoidingPlan(graph, node.graphTrieId, forbidden);
     if (!plan) {
-      setConstraintResult(false, 'No completion exists that avoids the selected features.');
+      setConstraintResult(false, 'No completion exists in the selected subtree that avoids the selected features.');
       return snapshot;
     }
     plans.set(node.uid, plan);
   }
 
-  const next = fillFrontierFromPlans(snapshot, graph, plans);
+  const next = fillFrontierFromPlans(snapshot, graph, plans, targetUid);
   if (!next) {
     setConstraintResult(false, 'Could not construct the constrained completion.');
     return snapshot;
@@ -649,12 +687,12 @@ function constrainedAvoidComplete(
   if (lowerBound(graph, next.root) > rootBudget(graph) + 1e-9) {
     setConstraintResult(
       false,
-      'No completion that avoids the selected features fits within the Rashomon budget.',
+      'No completion of the selected subtree that avoids the selected features fits within the Rashomon budget.',
     );
     return snapshot;
   }
 
-  setConstraintResult(true, 'Built the optimal completion that avoids the selected features.');
+  setConstraintResult(true, 'Built the optimal constrained completion for the selected subtree.');
   return next;
 }
 
@@ -702,9 +740,22 @@ function constrainedSampleComplete(
   graph: AndOrGraph,
   featureTruth: Record<string, boolean>,
   targetPrediction: number,
+  targetUid: number,
 ): HistorySnapshot {
+  const scopeRoot = findNode(snapshot.root, targetUid);
+  if (!scopeRoot) {
+    setConstraintResult(false, 'The selected subtree could not be found.');
+    return snapshot;
+  }
+
+  const scopeFrontier = unresolvedNodes(scopeRoot);
+  if (scopeFrontier.length === 0) {
+    setConstraintResult(false, 'The selected subtree has no unfinished choices to complete.');
+    return snapshot;
+  }
+
   const route: PartialRouteResult = { frontier: [], leaves: [] };
-  routePartialSample(snapshot.root, featureTruth, route);
+  routePartialSample(scopeRoot, featureTruth, route);
 
   if (route.error) {
     setConstraintResult(false, route.error);
@@ -718,7 +769,7 @@ function constrainedSampleComplete(
   if (conflictingLeaf) {
     setConstraintResult(
       false,
-      `Some full samples consistent with the entered values already reach an existing leaf with prediction ${String(
+      `Some samples consistent with the entered values already reach an existing leaf in the selected subtree with prediction ${String(
         conflictingLeaf.prediction,
       )}. Rewind that branch before requiring class ${String(targetPrediction)}.`,
     );
@@ -730,7 +781,7 @@ function constrainedSampleComplete(
   const constrainedMemo = new Map<number, CompletionPlan | undefined>();
   const freeMemo = new Map<number, CompletionPlan | undefined>();
 
-  for (const node of unresolvedNodes(snapshot.root)) {
+  for (const node of scopeFrontier) {
     const plan = constrainedFrontier.has(node.uid)
       ? bestPredictingPlan(
           graph,
@@ -746,10 +797,10 @@ function constrainedSampleComplete(
       setConstraintResult(
         false,
         constrainedFrontier.has(node.uid)
-          ? `No completion can guarantee class ${String(
+          ? `No completion of the selected subtree can guarantee class ${String(
               targetPrediction,
             )} for every sample consistent with the entered values.`
-          : 'Could not optimally complete one of the remaining nodes.',
+          : 'Could not optimally complete one of the remaining nodes in the selected subtree.',
       );
       return snapshot;
     }
@@ -757,7 +808,7 @@ function constrainedSampleComplete(
     plans.set(node.uid, plan);
   }
 
-  const next = fillFrontierFromPlans(snapshot, graph, plans);
+  const next = fillFrontierFromPlans(snapshot, graph, plans, targetUid);
   if (!next) {
     setConstraintResult(false, 'Could not construct the constrained completion.');
     return snapshot;
@@ -766,7 +817,7 @@ function constrainedSampleComplete(
   if (lowerBound(graph, next.root) > rootBudget(graph) + 1e-9) {
     setConstraintResult(
       false,
-      `No completion that guarantees class ${String(
+      `No completion of the selected subtree that guarantees class ${String(
         targetPrediction,
       )} for every sample consistent with the entered values fits within the Rashomon budget.`,
     );
@@ -775,7 +826,7 @@ function constrainedSampleComplete(
 
   setConstraintResult(
     true,
-    `Built the optimal completion guaranteeing class ${String(
+    `Built the optimal completion of the selected subtree guaranteeing class ${String(
       targetPrediction,
     )} for every sample consistent with the entered values.`,
   );
@@ -785,11 +836,17 @@ function constrainedSampleComplete(
 export function optimalComplete(
   snapshot: HistorySnapshot,
   graph: AndOrGraph,
+  targetUid: number = snapshot.activeUid,
 ): HistorySnapshot {
   const constraint = window.ARBORENUM_CONSTRAINED_COMPLETION;
 
   if (constraint?.mode === 'avoid') {
-    return constrainedAvoidComplete(snapshot, graph, constraint.forbiddenInternalFeatures);
+    return constrainedAvoidComplete(
+      snapshot,
+      graph,
+      constraint.forbiddenInternalFeatures,
+      targetUid,
+    );
   }
 
   if (constraint?.mode === 'sample') {
@@ -798,13 +855,17 @@ export function optimalComplete(
       graph,
       constraint.featureTruth,
       Number(constraint.targetPrediction),
+      targetUid,
     );
   }
 
-  let cur = autoExpandSingletons(cloneTree(snapshot), graph);
+  let cur = autoExpandSingletons(cloneTree(snapshot), graph, targetUid);
 
-  while (!isComplete(cur.root)) {
-    const node = unresolvedNodes(cur.root)[0];
+  while (true) {
+    const target = findNode(cur.root, targetUid);
+    if (!target) return cur;
+
+    const node = unresolvedNodes(target)[0];
     if (!node) break;
 
     const feasibleChoices = annotateChoicesFor(graph, cur, node.uid)
@@ -825,9 +886,9 @@ export function optimalComplete(
     const chosen = best.choice;
 
     if (chosen.kind === 'leaf') {
-      cur = applyLeaf(cur, graph, node.uid, chosen.leaf.id);
+      cur = applyLeaf(cur, graph, node.uid, chosen.leaf.id, targetUid);
     } else {
-      cur = applySplit(cur, graph, node.uid, chosen.split.id);
+      cur = applySplit(cur, graph, node.uid, chosen.split.id, targetUid);
     }
   }
 
