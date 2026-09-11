@@ -12,7 +12,7 @@ function updateCompletionScopeCopy() {
   setText(completionLabel?.querySelector('b') ?? null, 'Complete subtree');
   setText(
     completionLabel?.querySelector('span') ?? null,
-    'Fill unfinished nodes below the selected node',
+    'Complete the subtree rooted at the selected node',
   );
 
   const constraintSubtitle = document.querySelector(
@@ -20,7 +20,7 @@ function updateCompletionScopeCopy() {
   );
   setText(
     constraintSubtitle,
-    'Optimally fill unfinished nodes below the selected node subject to constraints and the current Rashomon budget.',
+    'Optimally complete the subtree rooted at the selected node subject to constraints and the current Rashomon budget.',
   );
 }
 
