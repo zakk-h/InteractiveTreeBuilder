@@ -1,0 +1,31 @@
+name: ChatGPT build static bundle
+
+on:
+  push:
+    branches:
+      - chatgpt-temp-builder-build
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build single-file app
+        run: npm run build
+
+      - name: Upload ArborEnum builder
+        uses: actions/upload-artifact@v4
+        with:
+          name: arborenum-builder-static
+          path: dist/index.html
+          if-no-files-found: error
