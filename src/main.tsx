@@ -114,6 +114,7 @@ type BuilderUi = {
   featureNames: Record<string, string>;
   groupNames: Record<string, string>;
   featureDescriptions: Record<string, string>;
+  binaryFeatureFlips: Record<string, boolean>;
   colors: BuilderColors;
 };
 
@@ -157,6 +158,7 @@ function makeDefaultUi(): BuilderUi {
     featureNames: {},
     groupNames: {},
     featureDescriptions: {},
+    binaryFeatureFlips: {},
     colors: {
       ...DEFAULT_COLORS,
       leafNodesByClass: { ...DEFAULT_COLORS.leafNodesByClass },
@@ -201,6 +203,55 @@ function customGroupName(group: string, ui: BuilderUi): string {
 
 function customFeatureName(feature: number, meta: FeatureMeta, ui: BuilderUi): string {
   return ui.featureNames[String(feature)]?.trim() || featureLabel(feature, meta);
+}
+
+function featureRegistryEntry(
+  feature: number,
+  meta: FeatureMeta & Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const registry = meta.featureRegistry;
+  if (!Array.isArray(registry)) return undefined;
+
+  return registry.find((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    return Number((entry as Record<string, unknown>).internalFeature) === feature;
+  }) as Record<string, unknown> | undefined;
+}
+
+function isBinaryFeature(
+  feature: number,
+  meta: FeatureMeta & Record<string, unknown>,
+): boolean {
+  const registryKind = featureRegistryEntry(feature, meta)?.kind;
+  if (registryKind === 'binary_threshold') return true;
+  if (registryKind === 'continuous_threshold') return false;
+  return groupName(feature, meta) === undefined;
+}
+
+function binaryFeatureIsFlipped(
+  feature: number,
+  meta: FeatureMeta & Record<string, unknown>,
+  ui: BuilderUi,
+): boolean {
+  return isBinaryFeature(feature, meta) && (ui.binaryFeatureFlips[String(feature)] ?? true);
+}
+
+function naturalBinaryFeatureName(
+  feature: number,
+  meta: FeatureMeta & Record<string, unknown>,
+  ui: BuilderUi,
+): string {
+  const custom = ui.featureNames[String(feature)]?.trim();
+  if (custom) return custom;
+
+  const originalName = featureRegistryEntry(feature, meta)?.originalName;
+  if (typeof originalName === 'string' && originalName.trim()) {
+    return originalName.trim();
+  }
+
+  return featureLabel(feature, meta)
+    .replace(/\s*(?:<=|>=|≤|≥|<|>|=)\s*-?\d+(?:\.\d+)?(?:e[-+]?\d+)?\s*$/i, '')
+    .trim();
 }
 
 function displayGroupName(feature: number, meta: FeatureMeta, ui: BuilderUi): string | undefined {
@@ -336,7 +387,7 @@ function prettyThresholdLabel(
 
 function prettySplitLabel(
   feature: number,
-  meta: FeatureMeta,
+  meta: FeatureMeta & Record<string, unknown>,
   thresholdDecimals = 3,
   ui: BuilderUi = makeDefaultUi(),
 ): string {
@@ -348,6 +399,10 @@ function prettySplitLabel(
       meta,
       thresholdDecimals,
     )}`;
+  }
+
+  if (binaryFeatureIsFlipped(feature, meta, ui)) {
+    return compactFeatureName(naturalBinaryFeatureName(feature, meta, ui), 28);
   }
 
   const raw = customFeatureName(feature, meta, ui);
@@ -362,7 +417,7 @@ function prettySplitLabel(
 
 function fullSplitLabel(
   feature: number | undefined,
-  meta: FeatureMeta,
+  meta: FeatureMeta & Record<string, unknown>,
   thresholdDecimals = 3,
   ui: BuilderUi = makeDefaultUi(),
 ): string {
@@ -378,10 +433,36 @@ function fullSplitLabel(
     )}`;
   }
 
+  if (binaryFeatureIsFlipped(feature, meta, ui)) {
+    return naturalBinaryFeatureName(feature, meta, ui);
+  }
+
   return customFeatureName(feature, meta, ui).replace(
     /(<=|>=|<|>|=)\s*(-?\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i,
     (_match, op, value) => `${op} ${formatThresholdValue(value, thresholdDecimals)}`,
   );
+}
+
+function displayTreeForUi(
+  node: BuildNode,
+  meta: FeatureMeta & Record<string, unknown>,
+  ui: BuilderUi,
+): BuildNode {
+  const displayNode: BuildNode = {
+    ...node,
+    left: node.left ? displayTreeForUi(node.left, meta, ui) : undefined,
+    right: node.right ? displayTreeForUi(node.right, meta, ui) : undefined,
+  };
+
+  if (
+    node.kind === 'split' &&
+    node.feature !== undefined &&
+    binaryFeatureIsFlipped(node.feature, meta, ui)
+  ) {
+    [displayNode.left, displayNode.right] = [displayNode.right, displayNode.left];
+  }
+
+  return displayNode;
 }
 
 function gammaRaw(
@@ -1398,10 +1479,10 @@ function BuilderSettingsMenu({
 
   const groups = useMemo(() => continuousGroupEntries(meta), [meta]);
 
-  const binaryFeatures = useMemo(() => {
-    const grouped = new Set(groups.flatMap((g) => g.features));
-    return allSplitFeatures(graph).filter((feature) => !grouped.has(feature));
-  }, [graph, groups]);
+  const binaryFeatures = useMemo(
+    () => allSplitFeatures(graph).filter((feature) => isBinaryFeature(feature, meta)),
+    [graph, meta],
+  );
 
   const updateLabelName = (prediction: number, value: string) => {
     setUi((cur) => ({
@@ -1429,6 +1510,16 @@ function BuilderSettingsMenu({
       featureNames: {
         ...cur.featureNames,
         [String(feature)]: value,
+      },
+    }));
+  };
+
+  const toggleBinaryFeatureParity = (feature: number) => {
+    setUi((cur) => ({
+      ...cur,
+      binaryFeatureFlips: {
+        ...cur.binaryFeatureFlips,
+        [String(feature)]: !(cur.binaryFeatureFlips[String(feature)] ?? true),
       },
     }));
   };
@@ -1468,6 +1559,13 @@ function BuilderSettingsMenu({
     }));
   };
 
+  const resetParity = () => {
+    setUi((cur) => ({
+      ...cur,
+      binaryFeatureFlips: {},
+    }));
+  };
+
   const resetColors = () => {
     setUi((cur) => ({
       ...cur,
@@ -1491,7 +1589,7 @@ function BuilderSettingsMenu({
           <div className="settings-header">
             <div>
               <b>Customize UI</b>
-              <span>Names and colors only affect display.</span>
+              <span>Names, binary parity, and colors only affect display.</span>
             </div>
 
             <button className="mini-button" onClick={() => setOpen(false)}>
@@ -1560,16 +1658,42 @@ function BuilderSettingsMenu({
               <div className="settings-empty">No binary features to show.</div>
             )}
 
-            {binaryFeatures.map((feature) => (
-              <label className="settings-row" key={`feature-${feature}`}>
-                <span>feature {feature}</span>
-                <input
-                  value={ui.featureNames[String(feature)] ?? ''}
-                  placeholder={featureLabel(feature, meta)}
-                  onChange={(e) => updateFeatureName(feature, e.target.value)}
-                />
-              </label>
-            ))}
+            {binaryFeatures.map((feature) => {
+              const flipped = binaryFeatureIsFlipped(feature, meta, ui);
+              const naturalName = naturalBinaryFeatureName(feature, meta, ui);
+
+              return (
+                <div className="settings-row" key={`feature-${feature}`}>
+                  <span title={naturalName}>{naturalName}</span>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) auto',
+                      gap: 8,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <input
+                      value={ui.featureNames[String(feature)] ?? ''}
+                      placeholder={naturalBinaryFeatureName(feature, meta, makeDefaultUi())}
+                      onChange={(e) => updateFeatureName(feature, e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="mini-button"
+                      onClick={() => toggleBinaryFeatureParity(feature)}
+                      title={
+                        flipped
+                          ? `Currently displaying ${naturalName} with natural true/false branches. Click to restore ${featureLabel(feature, meta)}.`
+                          : `Currently displaying the raw threshold parity. Click to make ${naturalName} the natural true branch.`
+                      }
+                    >
+                      {flipped ? 'Parity: flipped' : 'Parity: raw'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <div className="settings-section">
@@ -1631,6 +1755,10 @@ function BuilderSettingsMenu({
               Reset names
             </button>
 
+            <button className="mini-button" onClick={resetParity}>
+              Reset parity
+            </button>
+
             <button className="mini-button" onClick={resetColors}>
               Reset colors
             </button>
@@ -1661,8 +1789,8 @@ function FlowView({
   const rf = useReactFlow();
 
   const { nodes: laidNodes, edges: laidEdges } = useMemo(
-    () => layoutTree(snapshot.root),
-    [snapshot.root],
+    () => layoutTree(displayTreeForUi(snapshot.root, meta, ui)),
+    [snapshot.root, meta, ui.binaryFeatureFlips],
   );
 
   const nodes: Node<NodeData>[] = useMemo(
