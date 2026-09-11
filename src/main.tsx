@@ -724,8 +724,6 @@ function ArborEnumNode({ data }: { data: NodeData }) {
         </div>
       )}
 
-      {b.kind === 'choice' && <div className="choice-pill">{feasibleChoices}</div>}
-
       <Handle type="source" position={Position.Bottom} className="handle" />
     </div>
   );
@@ -1496,11 +1494,8 @@ function BuilderSettingsMenu({
 
   const updateGroupName = (group: string, value: string) => {
     setUi((cur) => ({
-      ...cur,
-      groupNames: {
-        ...cur.groupNames,
-        [group]: value,
-      },
+      ...cur.groupNames,
+      [group]: value,
     }));
   };
 
